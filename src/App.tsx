@@ -12,6 +12,7 @@ import {
   YAxis,
 } from 'recharts'
 import report from './data/reportData.json'
+import MeetingsTab from './MeetingsTab'
 
 type Ticket = {
   key: string
@@ -77,7 +78,9 @@ type PeriodOption = {
 }
 
 const data = report as ReportShape
-const USER_ID = 'user_39k04YViHtKgH2FkJO4CoIl4Hme'
+const USER_ID = (import.meta as any).env?.VITE_USER_ID || ''
+const GOOGLE_SIGN_IN_URL = (import.meta as any).env?.VITE_GOOGLE_SIGN_IN_URL || ''
+const JIRA_PROXY_BASE = ((import.meta as any).env?.VITE_JIRA_PROXY_BASE || '/api/proxy/jira').replace(/\/$/, '')
 const PIE_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a78bfa', '#14b8a6', '#f43f5e', '#8b5cf6']
 const PROJECT_TYPE_OPTIONS = ['All Project Types', 'AI', 'Not yet classified', 'Operational/Tactical', 'Regulatory/Compliance', 'Strategic']
 
@@ -225,20 +228,23 @@ async function fetchJiraSearch(jql: string, maxResults: number, nextPageToken?: 
 
   const baseUrl = (import.meta as any).env?.BASE_URL || '/'
   const normalizedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
-  const candidates = [
-    `${window.location.origin}${normalizedBase}/proxy/jira/rest/api/3/search/jql?${qs.toString()}`,
-    `${window.location.origin}/proxy/jira/rest/api/3/search/jql?${qs.toString()}`,
-    `${window.location.origin}/api/proxy/jira/rest/api/3/search/jql?${qs.toString()}`,
-  ]
+  const proxyBases = Array.from(
+    new Set([JIRA_PROXY_BASE, `${normalizedBase}/proxy/jira`, '/proxy/jira', '/api/proxy/jira'].filter(Boolean)),
+  )
+  const candidates = proxyBases.map(
+    (proxyBase) => new URL(`${proxyBase}/rest/api/3/search/jql?${qs.toString()}`, window.location.origin).toString(),
+  )
   const errors: string[] = []
 
   for (const url of candidates) {
     try {
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+      }
+      if (USER_ID) headers['X-User-ID'] = USER_ID
+
       const res = await fetch(url, {
-        headers: {
-          'X-User-ID': USER_ID,
-          Accept: 'application/json',
-        },
+        headers,
         credentials: 'include',
       })
       const contentType = res.headers.get('content-type') || ''
@@ -531,6 +537,7 @@ function SortableFilterableTable<T>({
 }
 
 function App() {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'meetings'>('dashboard')
   const [reportData, setReportData] = useState<ReportShape>(data)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
@@ -684,6 +691,35 @@ function App() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_20%_0%,#0f2a5a_0%,#030b1f_40%,#020617_100%)] p-4 text-slate-100 md:p-8">
       <div className="mx-auto max-w-[1500px] space-y-6">
+        {/* Tab switcher */}
+        <div className="flex gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-2">
+          <button
+            onClick={() => setActiveTab('dashboard')}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${activeTab === 'dashboard' ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-700' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            Jira Dashboard
+          </button>
+          <button
+            onClick={() => setActiveTab('meetings')}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${activeTab === 'meetings' ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-700' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            Meeting Intelligence
+          </button>
+        </div>
+
+        {/* Meetings tab */}
+        {activeTab === 'meetings' && (
+          <div>
+            <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+              <h1 className="text-4xl font-bold tracking-tight text-white">Meeting Intelligence</h1>
+              <p className="mt-1 text-sm text-slate-400">Upload a Copilot meeting extract to extract actions, create Jira tickets, and draft follow-up emails.</p>
+            </div>
+            <MeetingsTab />
+          </div>
+        )}
+
+        {/* Dashboard tab */}
+        {activeTab === 'dashboard' && <>
         <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
           <div>
             <h1 className="text-4xl font-bold tracking-tight text-white">Jira Work Intelligence</h1>
@@ -691,6 +727,9 @@ function App() {
             <p className="mt-1 text-xs text-slate-500">
               Owner: {summary.owner.name} | Generated: {new Date(summary.generatedAt).toLocaleString()}
             </p>
+            {!USER_ID ? (
+              <p className="mt-1 text-xs text-amber-300">Setup hint: set `VITE_USER_ID` to use authenticated Jira proxy requests.</p>
+            ) : null}
             {refreshError ? <p className="mt-1 text-xs text-rose-300">Refresh failed: {refreshError}</p> : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -706,6 +745,14 @@ function App() {
             >
               {isRefreshing ? 'Refreshing...' : 'Refresh'}
             </button>
+            {GOOGLE_SIGN_IN_URL ? (
+              <a
+                href={GOOGLE_SIGN_IN_URL}
+                className="rounded-xl border border-emerald-700 bg-emerald-600/20 px-3 py-2 text-sm font-semibold text-emerald-200"
+              >
+                Sign in with Google
+              </a>
+            ) : null}
             <select
               value={selectedProjectType}
               onChange={(e) => setSelectedProjectType(e.target.value)}
@@ -835,6 +882,7 @@ function App() {
           defaultSortKey="resolved"
           defaultSortDir="desc"
         />
+        </>}
       </div>
     </div>
   )
