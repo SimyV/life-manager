@@ -1,0 +1,11 @@
+RewriteEngine On
+
+# Route Jira proxy requests to agent-purple proxy
+RewriteRule ^api/proxy/jira/(.*)$ https://agent-purple.com/api/proxy/jira/$1 [P,L]
+
+# SPA fallback
+RewriteBase /
+RewriteRule ^index\.html$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.html [L]
