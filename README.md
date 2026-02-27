@@ -1,4 +1,17 @@
-# Life Manager (Jira Dashboard)
+# Life Manager
+
+A Jira-integrated personal dashboard built with Vite, React, TypeScript, and Tailwind CSS.
+
+---
+
+## Stack
+
+- **Vite** + **React** + **TypeScript**
+- **Tailwind CSS** for styling
+- **Jira REST API** via server-side proxy
+- **Google Sign-In** for authentication
+
+---
 
 ## Setup
 
@@ -15,7 +28,7 @@ cp .env.example .env
 3. Set values in `.env`:
 - `VITE_USER_ID`: your user ID used by the Jira proxy for auth.
 - `VITE_JIRA_PROXY_BASE`: leave default unless your proxy path differs.
-- `VITE_GOOGLE_SIGN_IN_URL`: Google sign-in URL you want the app button to open.
+- `VITE_GOOGLE_SIGN_IN_URL`: Google sign-in URL for the app.
 
 4. Run locally:
 ```bash
@@ -27,45 +40,37 @@ npm run dev
 npm run build
 ```
 
-## Jira Token (Atlassian)
+Output goes to `dist/`.
 
-Create token at:
-- `https://id.atlassian.com/manage-profile/security/api-tokens`
+---
 
-The token is used server-side by your proxy/integration (not hardcoded in frontend).
+## Jira Integration
 
-## Host-ly Subdomain Deploy (non-local)
+The app connects to Jira through a server-side proxy -- the Atlassian API token is never exposed to the frontend.
 
-Use a dedicated subdomain, for example `life.yourdomain.com`.
+Create your Jira API token at:
+- https://id.atlassian.com/manage-profile/security/api-tokens
 
-1. In `manage.host-ly.com`:
-- Create subdomain (`life`).
-- Point document root to your app publish folder (for example `public_html/life`).
+Configure the token in your proxy/backend environment, not in the frontend `.env`.
 
-2. Build and upload:
+---
+
+## Deployment
+
+Build the app and deploy the `dist/` folder to any static hosting provider. The app requires:
+
+1. **SPA routing fallback** -- all paths should serve `index.html` (configure via your web server or `.htaccess`)
+2. **Jira API proxy** -- requests to `/api/proxy/jira/*` must be routed to your backend proxy
+3. **Environment variables** set at build time (`VITE_USER_ID`, `VITE_GOOGLE_SIGN_IN_URL`, `VITE_JIRA_PROXY_BASE`)
+
 ```bash
 npm ci
 npm run build
-```
-Upload contents of `dist/` into the subdomain document root.
-
-3. SPA routing fallback:
-Add `.htaccess` in the subdomain root:
-```apache
-RewriteEngine On
-RewriteBase /
-RewriteRule ^index\.html$ - [L]
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule . /index.html [L]
+# Upload dist/ to your hosting
 ```
 
-4. Proxy for Jira API path:
-Configure reverse proxy so requests from
-- `/api/proxy/jira/*`
-route to your backend proxy (configured separately).
+---
 
-5. Set production env values at build time:
-- `VITE_USER_ID=<your_user_id>`
-- `VITE_GOOGLE_SIGN_IN_URL=<your_google_signin_url>`
-- `VITE_JIRA_PROXY_BASE=/api/proxy/jira`
+## Licence
+
+MIT
