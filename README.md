@@ -81,7 +81,7 @@ The app includes an AI-powered **Meeting Notes** tab for parsing and actioning m
 
 | Variable | Purpose |
 |----------|---------|
-| `VITE_R2_URL` | Base URL of the R2 worker (e.g. `https://r2.host-ly.com`) |
+| `VITE_R2_URL` | Base URL of the R2 worker (e.g. `https://r2.bashai.io`) |
 | `VITE_R2_SECRET` | Bearer token for R2 worker authentication |
 | `VITE_OUTLOOK_BRIDGE_URL` | Windows Outlook bridge URL for calendar invite sending (optional) |
 
@@ -113,4 +113,4 @@ MIT
 
 ---
 
-Last updated: 2026-02-27
+Last updated: 2026-03-02
