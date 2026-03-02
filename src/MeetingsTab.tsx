@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 
-const R2_URL = ((import.meta as any).env?.VITE_R2_URL || 'https://r2.host-ly.com').replace(/\/$/, '')
+const R2_URL = ((import.meta as any).env?.VITE_R2_URL || 'https://r2.bashai.io').replace(/\/$/, '')
 const R2_SECRET = (import.meta as any).env?.VITE_R2_SECRET || ''
 const JIRA_PROXY_BASE = ((import.meta as any).env?.VITE_JIRA_PROXY_BASE || '/api/proxy/jira').replace(/\/$/, '')
 const USER_ID = (import.meta as any).env?.VITE_USER_ID || ''
