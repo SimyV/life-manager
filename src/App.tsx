@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { UserButton, useAuth } from '@clerk/clerk-react'
+import { useWorkspace } from './WorkspaceContext'
 import {
   Bar,
   BarChart,
@@ -13,6 +15,7 @@ import {
 } from 'recharts'
 import report from './data/reportData.json'
 import MeetingsTab from './MeetingsTab'
+import SettingsTab from './SettingsTab'
 
 type Ticket = {
   key: string
@@ -78,9 +81,7 @@ type PeriodOption = {
 }
 
 const data = report as ReportShape
-const USER_ID = (import.meta as any).env?.VITE_USER_ID || ''
-const GOOGLE_SIGN_IN_URL = (import.meta as any).env?.VITE_GOOGLE_SIGN_IN_URL || ''
-const JIRA_PROXY_BASE = ((import.meta as any).env?.VITE_JIRA_PROXY_BASE || '/api/proxy/jira').replace(/\/$/, '')
+const R2_URL = ((import.meta as any).env?.VITE_R2_URL || 'https://r2.bashai.io').replace(/\/$/, '')
 const PIE_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a78bfa', '#14b8a6', '#f43f5e', '#8b5cf6']
 const PROJECT_TYPE_OPTIONS = ['All Project Types', 'AI', 'Not yet classified', 'Operational/Tactical', 'Regulatory/Compliance', 'Strategic']
 
@@ -193,14 +194,15 @@ function isWithinLast24Hours(value: string | null): boolean {
   return ageMs >= 0 && ageMs <= 24 * 60 * 60 * 1000
 }
 
-function deriveBrand(labels: string[], brands: string[]): string {
+function deriveBrand(labels: string[], brands: string[], knownBrands: string[]): string {
   const hay = [...labels, ...brands].join(' ').toLowerCase()
-  if (hay.includes('selleys')) return 'Selleys'
-  if (hay.includes('yates')) return 'Yates'
+  for (const brand of knownBrands) {
+    if (hay.includes(brand.toLowerCase())) return brand
+  }
   return 'Other'
 }
 
-async function fetchJiraSearch(jql: string, maxResults: number, nextPageToken?: string): Promise<any> {
+async function fetchJiraSearch(jql: string, maxResults: number, getToken: () => Promise<string | null>, nextPageToken?: string): Promise<any> {
   const fields = [
     'summary',
     'status',
@@ -226,50 +228,26 @@ async function fetchJiraSearch(jql: string, maxResults: number, nextPageToken?: 
   })
   if (nextPageToken) qs.set('nextPageToken', nextPageToken)
 
-  const baseUrl = (import.meta as any).env?.BASE_URL || '/'
-  const normalizedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
-  const proxyBases = Array.from(
-    new Set([JIRA_PROXY_BASE, `${normalizedBase}/proxy/jira`, '/proxy/jira', '/api/proxy/jira'].filter(Boolean)),
-  )
-  const candidates = proxyBases.map(
-    (proxyBase) => new URL(`${proxyBase}/rest/api/3/search/jql?${qs.toString()}`, window.location.origin).toString(),
-  )
-  const errors: string[] = []
+  const token = await getToken()
+  if (!token) throw new Error('Not authenticated — please sign in.')
 
-  for (const url of candidates) {
-    try {
-      const headers: Record<string, string> = {
-        Accept: 'application/json',
-      }
-      if (USER_ID) headers['X-User-ID'] = USER_ID
+  const url = `${R2_URL}/jira/rest/api/3/search/jql?${qs.toString()}`
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/json',
+    },
+  })
 
-      const res = await fetch(url, {
-        headers,
-        credentials: 'include',
-      })
-      const contentType = res.headers.get('content-type') || ''
-      if (contentType.includes('application/json')) {
-        const body = await res.json()
-        if (!res.ok) {
-          const msg = body?.message || body?.error || `HTTP ${res.status}`
-          throw new Error(String(msg))
-        }
-        return body
-      }
-      const text = await res.text()
-      if (text.includes('Sign In Required')) {
-        throw new Error('Session expired in preview, please refresh page and sign in again.')
-      }
-      throw new Error(`Non-JSON response (HTTP ${res.status})`)
-    } catch (err: any) {
-      errors.push(`${url}: ${err?.message || 'request failed'}`)
-    }
+  const body = await res.json().catch(() => null)
+  if (!res.ok) {
+    const msg = body?.message || body?.error || `HTTP ${res.status}`
+    throw new Error(String(msg))
   }
-
-  throw new Error(errors.join(' | '))
+  return body
 }
 
-function mapIssueToTicket(issue: any): Ticket {
+function mapIssueToTicket(issue: any, jiraInstanceUrl: string, knownBrands: string[]): Ticket {
   const f = issue.fields || {}
   const statusCategoryName = (f.status?.statusCategory?.name || '').toLowerCase()
   const isDone = statusCategoryName === 'done'
@@ -293,7 +271,7 @@ function mapIssueToTicket(issue: any): Ticket {
 
   return {
     key: issue.key,
-    url: `https://duluxgroup.atlassian.net/browse/${issue.key}`,
+    url: jiraInstanceUrl ? `https://${jiraInstanceUrl}/browse/${issue.key}` : `#${issue.key}`,
     summary: f.summary || '',
     status: f.status?.name || 'Unknown',
     rag: f.customfield_11578?.value || 'Unknown',
@@ -318,24 +296,24 @@ function mapIssueToTicket(issue: any): Ticket {
     isOverdue: age !== null && age > 0,
     stream: 'Demand',
     category,
-    brand: deriveBrand(labels, allBrandTokens),
+    brand: deriveBrand(labels, allBrandTokens, knownBrands),
     active: !isDone,
   }
 }
 
-async function refreshFromJira(prev: ReportShape): Promise<ReportShape> {
-  const jqlPrimary = [
-    '(assignee = currentUser() OR reporter = currentUser())',
-    'OR (project in (EPM, DLWLC) AND statusCategory != Done AND ("Brands/Function" ~ "Selleys" OR "Brands/Function" ~ "Yates"))',
-    'OR ("Project Type" = "AI")',
-  ].join(' ')
-  const owner = prev.summary.owner.name || ''
+type WorkspaceJiraConfig = {
+  jiraInstanceUrl: string
+  jiraDefaultJql?: string
+  brands: string[]
+  ownerName?: string
+}
+
+async function refreshFromJira(prev: ReportShape, getToken: () => Promise<string | null>, wsConfig: WorkspaceJiraConfig): Promise<ReportShape> {
+  const defaultJql = '(assignee = currentUser() OR reporter = currentUser())'
+  const jqlPrimary = wsConfig.jiraDefaultJql || defaultJql
+  const owner = wsConfig.ownerName || prev.summary.owner.name || ''
   const jqlFallback = owner
-    ? [
-        `(assignee = "${owner}" OR reporter = "${owner}")`,
-        'OR (project in (EPM, DLWLC) AND statusCategory != Done AND ("Brands/Function" ~ "Selleys" OR "Brands/Function" ~ "Yates"))',
-        'OR ("Project Type" = "AI")',
-      ].join(' ')
+    ? `(assignee = "${owner}" OR reporter = "${owner}")`
     : jqlPrimary
 
   const runQuery = async (jql: string): Promise<any[]> => {
@@ -344,7 +322,7 @@ async function refreshFromJira(prev: ReportShape): Promise<ReportShape> {
     let nextPageToken: string | undefined
 
     while (true) {
-      const page = await fetchJiraSearch(jql, maxResults, nextPageToken)
+      const page = await fetchJiraSearch(jql, maxResults, getToken, nextPageToken)
       const issues = Array.isArray(page?.issues) ? page.issues : Array.isArray(page) ? page : []
       allIssues.push(...issues)
       if (issues.length === 0 || page?.isLast) break
@@ -364,7 +342,7 @@ async function refreshFromJira(prev: ReportShape): Promise<ReportShape> {
     throw new Error('Refresh returned zero tickets; keeping previous dashboard data.')
   }
 
-  const refreshedTickets = allIssues.map(mapIssueToTicket)
+  const refreshedTickets = allIssues.map(i => mapIssueToTicket(i, wsConfig.jiraInstanceUrl, wsConfig.brands))
   const mergedByKey = new Map<string, Ticket>()
   for (const t of prev.tickets) mergedByKey.set(t.key, t)
   for (const t of refreshedTickets) mergedByKey.set(t.key, t)
@@ -537,7 +515,9 @@ function SortableFilterableTable<T>({
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'meetings'>('dashboard')
+  const { getToken } = useAuth()
+  const { workspace } = useWorkspace()
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'meetings' | 'settings'>('dashboard')
   const [reportData, setReportData] = useState<ReportShape>(data)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
@@ -669,7 +649,13 @@ function App() {
     setIsRefreshing(true)
     setRefreshError(null)
     try {
-      const latest = await refreshFromJira(reportData)
+      const wsConfig: WorkspaceJiraConfig = {
+        jiraInstanceUrl: workspace?.jiraInstanceUrl || '',
+        jiraDefaultJql: workspace?.jiraDefaultJql,
+        brands: workspace?.brands || [],
+        ownerName: workspace?.ownerName,
+      }
+      const latest = await refreshFromJira(reportData, getToken, wsConfig)
       setReportData(latest)
     } catch (err: any) {
       setRefreshError(err?.message || 'Failed to refresh')
@@ -692,7 +678,7 @@ function App() {
     <div className="min-h-screen bg-[radial-gradient(circle_at_20%_0%,#0f2a5a_0%,#030b1f_40%,#020617_100%)] p-4 text-slate-100 md:p-8">
       <div className="mx-auto max-w-[1500px] space-y-6">
         {/* Tab switcher */}
-        <div className="flex gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-2">
+        <div className="flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-2">
           <button
             onClick={() => setActiveTab('dashboard')}
             className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${activeTab === 'dashboard' ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-700' : 'text-slate-400 hover:text-slate-200'}`}
@@ -705,6 +691,15 @@ function App() {
           >
             Meeting Intelligence
           </button>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${activeTab === 'settings' ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-700' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            Settings
+          </button>
+          <div className="ml-auto">
+            <UserButton afterSignOutUrl="/" />
+          </div>
         </div>
 
         {/* Meetings tab */}
@@ -718,6 +713,17 @@ function App() {
           </div>
         )}
 
+        {/* Settings tab */}
+        {activeTab === 'settings' && (
+          <div>
+            <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+              <h1 className="text-4xl font-bold tracking-tight text-white">Settings</h1>
+              <p className="mt-1 text-sm text-slate-400">Configure workspace, integrations, and manage team members.</p>
+            </div>
+            <SettingsTab />
+          </div>
+        )}
+
         {/* Dashboard tab */}
         {activeTab === 'dashboard' && <>
         <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
@@ -727,9 +733,6 @@ function App() {
             <p className="mt-1 text-xs text-slate-500">
               Owner: {summary.owner.name} | Generated: {new Date(summary.generatedAt).toLocaleString()}
             </p>
-            {!USER_ID ? (
-              <p className="mt-1 text-xs text-amber-300">Setup hint: set `VITE_USER_ID` to use authenticated Jira proxy requests.</p>
-            ) : null}
             {refreshError ? <p className="mt-1 text-xs text-rose-300">Refresh failed: {refreshError}</p> : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -745,14 +748,6 @@ function App() {
             >
               {isRefreshing ? 'Refreshing...' : 'Refresh'}
             </button>
-            {GOOGLE_SIGN_IN_URL ? (
-              <a
-                href={GOOGLE_SIGN_IN_URL}
-                className="rounded-xl border border-emerald-700 bg-emerald-600/20 px-3 py-2 text-sm font-semibold text-emerald-200"
-              >
-                Sign in with Google
-              </a>
-            ) : null}
             <select
               value={selectedProjectType}
               onChange={(e) => setSelectedProjectType(e.target.value)}
