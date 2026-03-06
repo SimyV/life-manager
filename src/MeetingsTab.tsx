@@ -1,8 +1,11 @@
 import { useCallback, useRef, useState } from 'react'
-import { useAuth } from '@clerk/clerk-react'
-import { useWorkspace } from './WorkspaceContext'
 
-const R2_URL = ((import.meta as any).env?.VITE_R2_URL || 'https://r2.bashai.io').replace(/\/$/, '')
+const R2_URL = ((import.meta as any).env?.VITE_R2_URL || 'https://r2.host-ly.com').replace(/\/$/, '')
+const R2_SECRET = (import.meta as any).env?.VITE_R2_SECRET || ''
+const JIRA_PROXY_BASE = ((import.meta as any).env?.VITE_JIRA_PROXY_BASE || '/api/proxy/jira').replace(/\/$/, '')
+const USER_ID = (import.meta as any).env?.VITE_USER_ID || ''
+const OUTLOOK_BRIDGE_URL = ((import.meta as any).env?.VITE_OUTLOOK_BRIDGE_URL || '').replace(/\/$/, '')
+const SIMON_ACCOUNT_ID = '5f7a805b25fbdf00685e6cf8'
 
 export type ActionItem = {
   description: string
@@ -25,6 +28,7 @@ export type MeetingData = {
 }
 
 type JiraTicket = { key: string; url: string }
+type OutlookResult = { id: string }
 
 async function extractDocx(file: File): Promise<string> {
   const JSZip = (await import('jszip')).default
@@ -46,12 +50,15 @@ async function extractDocx(file: File): Promise<string> {
     .trim()
 }
 
-async function parseMeetingWithAI(text: string, fileName: string, token: string): Promise<Omit<MeetingData, 'id' | 'rawText' | 'parsedAt'>> {
+async function parseMeetingWithAI(text: string, fileName: string): Promise<Omit<MeetingData, 'id' | 'rawText' | 'parsedAt'>> {
+  if (!R2_SECRET) {
+    throw new Error('VITE_R2_SECRET not configured')
+  }
   const res = await fetch(`${R2_URL}/parse`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
+      Authorization: `Bearer ${R2_SECRET}`,
+      'content-type': 'application/json',
     },
     body: JSON.stringify({ text, fileName }),
   })
@@ -63,12 +70,12 @@ async function parseMeetingWithAI(text: string, fileName: string, token: string)
   return res.json()
 }
 
-async function saveToR2(meeting: MeetingData, token: string): Promise<void> {
+async function saveToR2(meeting: MeetingData): Promise<void> {
   const key = `meetings/${meeting.id}.json`
   const res = await fetch(`${R2_URL}/${key}`, {
     method: 'PUT',
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${R2_SECRET}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(meeting),
@@ -79,15 +86,10 @@ async function saveToR2(meeting: MeetingData, token: string): Promise<void> {
   }
 }
 
-async function createJiraTicket(
-  action: ActionItem,
-  meetingTitle: string,
-  token: string,
-  jiraConfig: { projectKey: string; accountId: string; instanceUrl: string },
-): Promise<JiraTicket> {
+async function createJiraTicket(action: ActionItem, meetingTitle: string): Promise<JiraTicket> {
   const body = {
     fields: {
-      project: { key: jiraConfig.projectKey },
+      project: { key: 'PKPI2' },
       summary: action.description,
       description: {
         type: 'doc',
@@ -100,17 +102,18 @@ async function createJiraTicket(
         ],
       },
       issuetype: { name: 'Task' },
-      assignee: { id: jiraConfig.accountId },
+      assignee: { id: SIMON_ACCOUNT_ID },
     },
   }
 
-  const res = await fetch(`${R2_URL}/jira/rest/api/3/issue`, {
+  const res = await fetch(`${JIRA_PROXY_BASE}/rest/api/3/issue`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
       Accept: 'application/json',
+      ...(USER_ID ? { 'X-User-ID': USER_ID } : {}),
     },
+    credentials: 'include',
     body: JSON.stringify(body),
   })
 
@@ -120,10 +123,36 @@ async function createJiraTicket(
   }
 
   const data = await res.json()
-  return { key: data.key, url: `https://${jiraConfig.instanceUrl}/browse/${data.key}` }
+  return { key: data.key, url: `https://duluxgroup.atlassian.net/browse/${data.key}` }
 }
 
-// TODO: Microsoft Graph email integration will be added in Step 7
+async function sendOutlookDraft(meeting: MeetingData): Promise<OutlookResult> {
+  if (!OUTLOOK_BRIDGE_URL) throw new Error('VITE_OUTLOOK_BRIDGE_URL not configured')
+
+  const actionList = meeting.actionItems
+    .map((a) => `• ${a.description} — ${a.owner}${a.dueDate ? ` (due ${a.dueDate})` : ''}`)
+    .join('\n')
+
+  const body = {
+    to: meeting.participants.map((p) => ({ email: '', name: p })),
+    subject: `Meeting Minutes: ${meeting.title} — ${meeting.date}`,
+    body: `Hi all,\n\nPlease find the minutes from our meeting on ${meeting.date}.\n\nKEY POINTS\n${meeting.keyPoints.map((p) => `• ${p}`).join('\n')}\n\nDECISIONS\n${meeting.decisions.map((d) => `• ${d}`).join('\n')}\n\nACTION ITEMS\n${actionList}\n\nNEXT STEPS\n${meeting.nextSteps.map((s) => `• ${s}`).join('\n')}\n\nRegards,\nSimon`,
+    isDraft: true,
+  }
+
+  const res = await fetch(`${OUTLOOK_BRIDGE_URL}/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Outlook draft failed: ${err}`)
+  }
+
+  return res.json()
+}
 
 function Badge({ children, color }: { children: React.ReactNode; color: string }) {
   return (
@@ -151,12 +180,11 @@ function Section({ title, items }: { title: string; items: string[] }) {
 }
 
 export default function MeetingsTab() {
-  const { getToken } = useAuth()
-  const { workspace } = useWorkspace()
   const [meeting, setMeeting] = useState<MeetingData | null>(null)
   const [step, setStep] = useState<'idle' | 'parsing' | 'review' | 'saving' | 'done'>('idle')
   const [error, setError] = useState<string | null>(null)
   const [jiraTickets, setJiraTickets] = useState<JiraTicket[]>([])
+  const [outlookSent, setOutlookSent] = useState(false)
   const [actionLog, setActionLog] = useState<string[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -166,18 +194,16 @@ export default function MeetingsTab() {
   const processFile = useCallback(async (file: File) => {
     setError(null)
     setJiraTickets([])
+    setOutlookSent(false)
     setActionLog([])
     setStep('parsing')
 
     try {
-      const token = await getToken()
-      if (!token) throw new Error('Not authenticated — please sign in.')
-
       log(`Reading ${file.name}...`)
       const text = await extractDocx(file)
       log('Extracted text, sending to Claude...')
 
-      const parsed = await parseMeetingWithAI(text, file.name, token)
+      const parsed = await parseMeetingWithAI(text, file.name)
       log('AI parsing complete.')
 
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -193,7 +219,7 @@ export default function MeetingsTab() {
       setError(err?.message || 'Failed to parse meeting')
       setStep('idle')
     }
-  }, [getToken])
+  }, [])
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -213,38 +239,35 @@ export default function MeetingsTab() {
     setError(null)
 
     try {
-      const token = await getToken()
-      if (!token) throw new Error('Not authenticated — please sign in.')
-
       // Save to R2
       log('Saving to R2...')
-      await saveToR2(meeting, token)
+      await saveToR2(meeting)
       log('Saved to R2.')
 
       // Create Jira tickets for Simon's action items
-      const jiraConfig = {
-        projectKey: (workspace as any)?.jiraProjectKey || '',
-        accountId: (workspace as any)?.jiraAccountId || '',
-        instanceUrl: (workspace as any)?.jiraInstanceUrl || '',
-      }
-
-      if (jiraConfig.projectKey && jiraConfig.accountId && jiraConfig.instanceUrl) {
-        const simonActions = meeting.actionItems.filter((a) => a.isSimon)
-        for (const action of simonActions) {
-          try {
-            log(`Creating Jira ticket: ${action.description.slice(0, 50)}...`)
-            const ticket = await createJiraTicket(action, meeting.title, token, jiraConfig)
-            setJiraTickets((prev) => [...prev, ticket])
-            log(`Created ${ticket.key}`)
-          } catch (err: any) {
-            log(`Jira failed: ${err?.message}`)
-          }
+      const simonActions = meeting.actionItems.filter((a) => a.isSimon)
+      for (const action of simonActions) {
+        try {
+          log(`Creating Jira ticket: ${action.description.slice(0, 50)}...`)
+          const ticket = await createJiraTicket(action, meeting.title)
+          setJiraTickets((prev) => [...prev, ticket])
+          log(`Created ${ticket.key}`)
+        } catch (err: any) {
+          log(`Jira failed: ${err?.message}`)
         }
-      } else {
-        log('Jira not configured — skipping ticket creation. Set up Jira in Settings.')
       }
 
-      // TODO: Microsoft Graph email will be added in Step 7
+      // Send Outlook draft
+      if (OUTLOOK_BRIDGE_URL) {
+        try {
+          log('Creating Outlook draft...')
+          await sendOutlookDraft(meeting)
+          setOutlookSent(true)
+          log('Outlook draft created.')
+        } catch (err: any) {
+          log(`Outlook failed: ${err?.message}`)
+        }
+      }
 
       setStep('done')
     } catch (err: any) {
@@ -347,6 +370,9 @@ export default function MeetingsTab() {
                           </a>
                         ))}
                       </div>
+                    )}
+                    {outlookSent && (
+                      <Badge color="bg-emerald-500/20 text-emerald-300">Draft email created</Badge>
                     )}
                     <button
                       onClick={() => { setMeeting(null); setStep('idle'); setActionLog([]) }}
