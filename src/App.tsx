@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
+import { UserButton, useAuth } from '@clerk/clerk-react'
+import { useWorkspace } from './WorkspaceContext'
+import { MeetingsTab, ReferenceDocsTab } from './MeetingsTab'
+import SettingsTab from './SettingsTab'
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
   Cell,
   Pie,
   PieChart,
   ResponsiveContainer,
   Tooltip,
-  XAxis,
-  YAxis,
 } from 'recharts'
 import report from './data/reportData.json'
-import MeetingsTab from './MeetingsTab'
 
 type Ticket = {
   key: string
@@ -34,6 +32,7 @@ type Ticket = {
   resolved: string | null
   assignee: string | null
   reporter: string | null
+  businessContact?: string | null
   priority: string | null
   agingDays: number | null
   agingBucket: string
@@ -43,6 +42,8 @@ type Ticket = {
   category: 'Strategic' | 'Tactical' | 'Ad hoc'
   brand: string
   active: boolean
+  projectTag?: string | null  // extracted from label "project-<id>"
+  projectNameFromDesc?: string | null  // extracted from description "Project: ..." line
 }
 
 type ReportShape = {
@@ -67,6 +68,7 @@ type ColumnDef<T> = {
   label: string
   value: (row: T) => string | number | null | undefined
   render?: (row: T) => JSX.Element | string | number
+  width?: string
 }
 
 type PeriodOption = {
@@ -78,11 +80,7 @@ type PeriodOption = {
 }
 
 const data = report as ReportShape
-const USER_ID = (import.meta as any).env?.VITE_USER_ID || ''
-const GOOGLE_SIGN_IN_URL = (import.meta as any).env?.VITE_GOOGLE_SIGN_IN_URL || ''
-const JIRA_PROXY_BASE = ((import.meta as any).env?.VITE_JIRA_PROXY_BASE || '/api/proxy/jira').replace(/\/$/, '')
 const PIE_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a78bfa', '#14b8a6', '#f43f5e', '#8b5cf6']
-const PROJECT_TYPE_OPTIONS = ['All Project Types', 'AI', 'Not yet classified', 'Operational/Tactical', 'Regulatory/Compliance', 'Strategic']
 
 function ragClass(rag: string): string {
   const r = rag.toLowerCase()
@@ -185,22 +183,20 @@ function bucketFromSignedAgingDays(days: number | null): string {
   return '0-30'
 }
 
-function isWithinLast24Hours(value: string | null): boolean {
-  const d = toDate(value)
-  if (!d) return false
-  const now = Date.now()
-  const ageMs = now - d.getTime()
-  return ageMs >= 0 && ageMs <= 24 * 60 * 60 * 1000
-}
 
-function deriveBrand(labels: string[], brands: string[]): string {
-  const hay = [...labels, ...brands].join(' ').toLowerCase()
-  if (hay.includes('selleys')) return 'Selleys'
-  if (hay.includes('yates')) return 'Yates'
+function deriveBrand(labels: string[], brands: string[], configuredBrands?: string[]): string {
+  if (brands.length > 0) return brands[0]
+  const hay = labels.join(' ').toLowerCase()
+  const knownBrands = configuredBrands && configuredBrands.length > 0 ? configuredBrands : ['Selleys', 'Yates']
+  for (const b of knownBrands) {
+    if (hay.includes(b.toLowerCase())) return b
+  }
   return 'Other'
 }
 
-async function fetchJiraSearch(jql: string, maxResults: number, nextPageToken?: string): Promise<any> {
+const R2_URL = ((import.meta as any).env?.VITE_R2_URL || 'https://r2.bashai.io').replace(/\/$/, '')
+
+async function fetchJiraSearch(jql: string, maxResults: number, token: string, nextPageToken?: string): Promise<any> {
   const fields = [
     'summary',
     'status',
@@ -215,61 +211,42 @@ async function fetchJiraSearch(jql: string, maxResults: number, nextPageToken?: 
     'duedate',
     'customfield_11342',
     'customfield_11578',
+    'customfield_11580',
     'customfield_11588',
     'customfield_11768',
     'customfield_12577',
-  ].join(',')
-  const qs = new URLSearchParams({
-    jql,
-    maxResults: String(maxResults),
-    fields,
+    'description',
+  ]
+
+  // POST body — Atlassian removed GET /search in Jan 2026, must use POST /search/jql
+  const body: Record<string, any> = { jql, maxResults, fields }
+  if (nextPageToken) body.nextPageToken = nextPageToken
+
+  const url = `${R2_URL}/jira/rest/api/3/search/jql`
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'omit',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
   })
-  if (nextPageToken) qs.set('nextPageToken', nextPageToken)
 
-  const baseUrl = (import.meta as any).env?.BASE_URL || '/'
-  const normalizedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
-  const proxyBases = Array.from(
-    new Set([JIRA_PROXY_BASE, `${normalizedBase}/proxy/jira`, '/proxy/jira', '/api/proxy/jira'].filter(Boolean)),
-  )
-  const candidates = proxyBases.map(
-    (proxyBase) => new URL(`${proxyBase}/rest/api/3/search/jql?${qs.toString()}`, window.location.origin).toString(),
-  )
-  const errors: string[] = []
-
-  for (const url of candidates) {
-    try {
-      const headers: Record<string, string> = {
-        Accept: 'application/json',
-      }
-      if (USER_ID) headers['X-User-ID'] = USER_ID
-
-      const res = await fetch(url, {
-        headers,
-        credentials: 'include',
-      })
-      const contentType = res.headers.get('content-type') || ''
-      if (contentType.includes('application/json')) {
-        const body = await res.json()
-        if (!res.ok) {
-          const msg = body?.message || body?.error || `HTTP ${res.status}`
-          throw new Error(String(msg))
-        }
-        return body
-      }
-      const text = await res.text()
-      if (text.includes('Sign In Required')) {
-        throw new Error('Session expired in preview, please refresh page and sign in again.')
-      }
-      throw new Error(`Non-JSON response (HTTP ${res.status})`)
-    } catch (err: any) {
-      errors.push(`${url}: ${err?.message || 'request failed'}`)
-    }
+  const contentType = res.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) {
+    const text = await res.text()
+    if (text.includes('Sign In Required')) throw new Error('Session expired — please refresh and sign in again.')
+    throw new Error(`Non-JSON response (HTTP ${res.status})`)
   }
 
-  throw new Error(errors.join(' | '))
+  const resBody = await res.json()
+  if (!res.ok) throw new Error(String(resBody?.message || resBody?.error || `HTTP ${res.status}`))
+  return resBody
 }
 
-function mapIssueToTicket(issue: any): Ticket {
+function mapIssueToTicket(issue: any, jiraInstanceUrl = 'duluxgroup.atlassian.net', configuredBrands?: string[]): Ticket {
   const f = issue.fields || {}
   const statusCategoryName = (f.status?.statusCategory?.name || '').toLowerCase()
   const isDone = statusCategoryName === 'done'
@@ -293,7 +270,7 @@ function mapIssueToTicket(issue: any): Ticket {
 
   return {
     key: issue.key,
-    url: `https://duluxgroup.atlassian.net/browse/${issue.key}`,
+    url: `https://${jiraInstanceUrl}/browse/${issue.key}`,
     summary: f.summary || '',
     status: f.status?.name || 'Unknown',
     rag: f.customfield_11578?.value || 'Unknown',
@@ -311,40 +288,54 @@ function mapIssueToTicket(issue: any): Ticket {
     resolved: f.resolutiondate ? String(f.resolutiondate).slice(0, 10) : null,
     assignee: f.assignee?.displayName || null,
     reporter: f.reporter?.displayName || null,
+    businessContact: typeof f.customfield_11580 === 'string' ? f.customfield_11580 : null,
     priority: f.priority?.name || null,
     agingDays: age,
     agingBucket: bucketFromSignedAgingDays(age),
     isDone,
-    isOverdue: age !== null && age > 0,
+    isOverdue: !isDone && age !== null && age > 0,
     stream: 'Demand',
     category,
-    brand: deriveBrand(labels, allBrandTokens),
+    brand: deriveBrand(labels, allBrandTokens, configuredBrands),
     active: !isDone,
+    projectTag: labels.find((l: string) => l.startsWith('project-'))?.replace('project-', '') ?? null,
+    projectNameFromDesc: (() => {
+      const descText: string = f.description?.content?.[0]?.content?.[0]?.text ?? ''
+      return descText.trim() || null
+    })(),
   }
 }
 
-async function refreshFromJira(prev: ReportShape): Promise<ReportShape> {
-  const jqlPrimary = [
-    '(assignee = currentUser() OR reporter = currentUser())',
-    'OR (project in (EPM, DLWLC) AND statusCategory != Done AND ("Brands/Function" ~ "Selleys" OR "Brands/Function" ~ "Yates"))',
+// Default Jira accountId — used in JQL since currentUser() doesn't resolve via the proxy
+const DEFAULT_ACCOUNT_ID = '5f7a805b25fbdf00685e6cf8'
+
+type RefreshConfig = {
+  token: string
+  accountId?: string
+  defaultJql?: string
+  jiraInstanceUrl?: string
+  brands?: string[]
+}
+
+async function refreshFromJira(prev: ReportShape, config: RefreshConfig): Promise<ReportShape> {
+  const accountId = config.accountId || DEFAULT_ACCOUNT_ID
+  const jiraInstance = config.jiraInstanceUrl || 'duluxgroup.atlassian.net'
+  const brands = config.brands && config.brands.length > 0 ? config.brands : ['Selleys', 'Yates']
+
+  // Use workspace-configured JQL if available, otherwise build the default query
+  const jql = config.defaultJql || [
+    `(assignee = "${accountId}" OR reporter = "${accountId}")`,
+    `OR (project in (EPM, DLWLC) AND statusCategory != Done AND (${brands.map(b => `"Brands[Function]" in ("${b}") OR labels in ("${b.toLowerCase()}") OR text ~ "${b}"`).join(' OR ')}))`,
     'OR ("Project Type" = "AI")',
   ].join(' ')
-  const owner = prev.summary.owner.name || ''
-  const jqlFallback = owner
-    ? [
-        `(assignee = "${owner}" OR reporter = "${owner}")`,
-        'OR (project in (EPM, DLWLC) AND statusCategory != Done AND ("Brands/Function" ~ "Selleys" OR "Brands/Function" ~ "Yates"))',
-        'OR ("Project Type" = "AI")',
-      ].join(' ')
-    : jqlPrimary
 
-  const runQuery = async (jql: string): Promise<any[]> => {
+  const runQuery = async (): Promise<any[]> => {
     const allIssues: any[] = []
     const maxResults = 100
     let nextPageToken: string | undefined
 
     while (true) {
-      const page = await fetchJiraSearch(jql, maxResults, nextPageToken)
+      const page = await fetchJiraSearch(jql, maxResults, config.token, nextPageToken)
       const issues = Array.isArray(page?.issues) ? page.issues : Array.isArray(page) ? page : []
       allIssues.push(...issues)
       if (issues.length === 0 || page?.isLast) break
@@ -355,16 +346,13 @@ async function refreshFromJira(prev: ReportShape): Promise<ReportShape> {
     return allIssues
   }
 
-  let allIssues = await runQuery(jqlPrimary)
-  if (allIssues.length === 0) {
-    allIssues = await runQuery(jqlFallback)
-  }
+  const allIssues = await runQuery()
 
   if (allIssues.length === 0) {
     throw new Error('Refresh returned zero tickets; keeping previous dashboard data.')
   }
 
-  const refreshedTickets = allIssues.map(mapIssueToTicket)
+  const refreshedTickets = allIssues.map(i => mapIssueToTicket(i, jiraInstance, brands))
   const mergedByKey = new Map<string, Ticket>()
   for (const t of prev.tickets) mergedByKey.set(t.key, t)
   for (const t of refreshedTickets) mergedByKey.set(t.key, t)
@@ -381,6 +369,7 @@ async function refreshFromJira(prev: ReportShape): Promise<ReportShape> {
       ...prev.summary,
       generatedAt: new Date().toISOString(),
       owner: { name: prev.summary.owner.name },
+      scopeNote: 'Your assigned and reported tickets, plus all tickets with Project Type = AI.',
       totals: {
         ...prev.summary.totals,
         allTickets: tickets.length,
@@ -395,20 +384,21 @@ async function refreshFromJira(prev: ReportShape): Promise<ReportShape> {
   }
 }
 
-function PieLegendList({ data }: { data: Array<{ name: string; value: number }> }) {
+function ClickablePieLegend({ data, onSelect }: { data: Array<{ name: string; value: number }>; onSelect: (name: string) => void }) {
   return (
     <div className="mt-3 grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
       {data.map((row, idx) => (
-        <div key={row.name} className="flex items-center justify-between rounded bg-slate-950/60 px-2 py-1 text-slate-200">
+        <button
+          key={row.name}
+          onClick={() => onSelect(row.name)}
+          className="flex items-center justify-between rounded bg-slate-950/60 px-2 py-1 text-slate-200 transition hover:bg-slate-700/60 hover:text-white"
+        >
           <div className="flex min-w-0 items-center gap-2">
-            <span
-              className="inline-block h-2.5 w-2.5 rounded-full"
-              style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }}
-            />
+            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }} />
             <span className="truncate">{row.name}</span>
           </div>
           <span className="ml-2 font-semibold text-slate-100">{row.value}</span>
-        </div>
+        </button>
       ))}
     </div>
   )
@@ -496,7 +486,12 @@ function SortableFilterableTable<T>({
         <p className="text-xs text-slate-400">Rows: {filteredSorted.length}</p>
       </div>
       <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
+        <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+          <colgroup>
+            {columns.map((col) => (
+              <col key={col.key} style={{ width: col.width ?? 'auto' }} />
+            ))}
+          </colgroup>
           <thead>
             <tr className="border-b border-slate-700 text-left text-slate-300">
               {columns.map((col) => (
@@ -523,7 +518,7 @@ function SortableFilterableTable<T>({
             {filteredSorted.map((row, idx) => (
               <tr key={idx} className="border-b border-slate-800 text-slate-200 hover:bg-slate-800/50">
                 {columns.map((col) => (
-                  <td key={col.key} className="whitespace-nowrap px-2 py-2 align-top">
+                  <td key={col.key} className={`px-2 py-2 align-top ${col.width ? 'break-words' : 'whitespace-nowrap'}`}>
                     {col.render ? col.render(row) : String(col.value(row) ?? '-')}
                   </td>
                 ))}
@@ -536,22 +531,100 @@ function SortableFilterableTable<T>({
   )
 }
 
+type SpotlightKey = 'initiatives' | 'overdue' | 'completed' | 'active' | 'all' | null
+type PieSpotlight = { title: string; rows: Ticket[]; cols?: ColumnDef<Ticket>[] } | null
+
+function SpotlightModal({ title, rows, columns, onClose }: { title: string; rows: Ticket[]; columns: ColumnDef<Ticket>[]; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div className="max-h-[90vh] w-full max-w-6xl overflow-auto rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
+          <h2 className="text-lg font-semibold text-slate-100">{title} <span className="ml-2 text-sm font-normal text-slate-400">({rows.length} tickets)</span></h2>
+          <button onClick={onClose} className="rounded-lg px-3 py-1 text-slate-400 hover:bg-slate-800 hover:text-slate-100">✕</button>
+        </div>
+        <div className="p-4">
+          <SortableFilterableTable<Ticket> title="" rows={rows} columns={columns} defaultSortKey={columns[0]?.key} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'meetings'>('dashboard')
+  const { workspace } = useWorkspace()
+  const { getToken } = useAuth()
   const [reportData, setReportData] = useState<ReportShape>(data)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [hasInitialLoadCompleted, setHasInitialLoadCompleted] = useState(false)
+  const [spotlight, setSpotlight] = useState<SpotlightKey>(null)
+  const [pieSpotlight, setPieSpotlight] = useState<PieSpotlight>(null)
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'meetings' | 'reference' | 'settings'>('dashboard')
+  const [projects, setProjects] = useState<Array<{ id: string; name: string; colour: string }>>([])
+
+  useEffect(() => {
+    const loadProjects = async () => {
+      try {
+        const token = await getToken()
+        if (!token) return
+        const res = await fetch(`${R2_URL}/config/projects.json`, {
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'omit',
+        })
+        if (res.ok) setProjects(await res.json())
+      } catch {}
+    }
+    loadProjects()
+  }, [getToken])
+
+  const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
   const { summary, tickets } = reportData
   const options = useMemo(periodOptions, [])
   const [periodKey, setPeriodKey] = useState<string>('ALL')
-  const [selectedProjectType, setSelectedProjectType] = useState<string>('All Project Types')
+  const [dashTab, setDashTab] = useState<'my' | 'stakeholder' | 'completed' | 'decisions'>('my')
+  const [decisionTickets, setDecisionTickets] = useState<Ticket[]>([])
+  const [decisionsLoading, setDecisionsLoading] = useState(false)
+  const [decisionsError, setDecisionsError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (dashTab !== 'decisions') return
+    if (decisionTickets.length > 0) return  // already loaded
+    setDecisionsLoading(true)
+    setDecisionsError(null)
+    const loadDecisions = async () => {
+      try {
+        const token = await getToken()
+        if (!token) throw new Error('Not authenticated')
+        const projectKey = workspace?.jiraProjectKey || 'PKPI2'
+        const jiraInstance = workspace?.jiraInstanceUrl || 'duluxgroup.atlassian.net'
+        const allIssues: any[] = []
+        let nextPageToken: string | undefined
+        while (true) {
+          const page = await fetchJiraSearch(`project = ${projectKey} AND labels = decision ORDER BY created DESC`, 100, token, nextPageToken)
+          const issues = Array.isArray(page?.issues) ? page.issues : []
+          allIssues.push(...issues)
+          if (issues.length === 0 || page?.isLast) break
+          nextPageToken = page?.nextPageToken
+          if (!nextPageToken) break
+        }
+        setDecisionTickets(allIssues.map(i => mapIssueToTicket(i, jiraInstance, workspace?.brands)))
+      } catch (e: any) {
+        setDecisionsError(e.message)
+      } finally {
+        setDecisionsLoading(false)
+      }
+    }
+    loadDecisions()
+  }, [dashTab, getToken, workspace])
 
   const selected = options.find((o) => o.key === periodKey) || options[0]
 
-  const periodTickets = useMemo(() => {
-    if (selected.kind === 'all') return tickets
-    return tickets.filter((t) => {
+  const isDecision = (t: Ticket) => t.labels.includes('decision')
+
+  const projectFilteredTickets = useMemo(() => {
+    const nonDecision = tickets.filter((t) => !isDecision(t))
+    if (selected.kind === 'all') return nonDecision
+    return nonDecision.filter((t) => {
       const ref = toDate(t.startDate) || toDate(t.created)
       if (!ref) return false
       const y = ref.getFullYear()
@@ -561,22 +634,43 @@ function App() {
     })
   }, [tickets, selected])
 
-  const projectFilteredTickets = useMemo(() => {
-    if (selectedProjectType === 'All Project Types') return periodTickets
-    return periodTickets.filter((t) => (t.projectTypeValue || 'Not yet classified') === selectedProjectType)
-  }, [periodTickets, selectedProjectType])
-
-  const activeTickets = projectFilteredTickets.filter((t) => t.active)
   const completedTickets = projectFilteredTickets.filter((t) => t.isDone)
+  const ownerName = (workspace?.ownerName || summary.owner.name || '').toLowerCase()
+  const ownerParts = ownerName.split(/\s+/).filter(Boolean)
 
-  const projectTypeSplit = groupCount(projectFilteredTickets, (r) => r.projectTypeValue || 'Not yet classified')
-  const brandSplit = groupCount(projectFilteredTickets, (r) => r.brand)
-  const agingSplit = sortAgingBuckets(groupCount(activeTickets, (r) => r.agingBucket))
+  // "Mine" = assigned to the workspace owner, or PKPI2 active where owner is the business contact
+  const isMyTicket = (t: Ticket) => !t.assignee || !ownerName || t.assignee.toLowerCase().includes(ownerName) || ownerName.includes(t.assignee.toLowerCase())
+  const isOwnerContact = (t: Ticket) => !t.businessContact || ownerParts.some((p: string) => t.businessContact!.toLowerCase().includes(p))
 
-  const totalInitiatives = projectFilteredTickets.filter((t) => ['Initiative', 'Epic', 'Capability'].includes(t.issueType) || t.category === 'Strategic').length
-  const overdue = projectFilteredTickets.filter((t) => t.isOverdue).length
-  const completed = projectFilteredTickets.filter((t) => t.isDone).length
-  const newTicketsLast24h = projectFilteredTickets.filter((t) => isWithinLast24Hours(t.created))
+  const myAllTickets = projectFilteredTickets.filter((t) =>
+    t.active && (isMyTicket(t) || (t.key.startsWith('PKPI2-') && isOwnerContact(t)))
+  )
+  // Stakeholder PKPI2 = active PKPI2 with non-Simon business contact AND not assigned to Simon
+  const pkpi2OtherTickets = projectFilteredTickets.filter((t) =>
+    t.key.startsWith('PKPI2-') && t.active && !isMyTicket(t) && t.businessContact && !isOwnerContact(t)
+  )
+  const stakeholderNonPkpi2Active = projectFilteredTickets.filter((t) => t.active && !t.key.startsWith('PKPI2-') && !isMyTicket(t))
+  const stakeholderNonPkpi2Completed = projectFilteredTickets.filter((t) => t.isDone && !t.key.startsWith('PKPI2-') && !isMyTicket(t))
+  const allStakeholderTickets = [...pkpi2OtherTickets, ...stakeholderNonPkpi2Active]
+
+  // My Tickets tab charts
+  const projectTagSplit = groupCount(myAllTickets.filter((t) => t.key.startsWith('PKPI2-')), (r) => r.projectNameFromDesc || r.projectTag || 'Untagged')
+  const brandSplit = groupCount(myAllTickets, (r) => r.brand)
+  const agingSplit = sortAgingBuckets(groupCount(myAllTickets, (r) => r.agingBucket))
+
+  // Stakeholder tab charts
+  const stakeholderBrandSplit = groupCount(allStakeholderTickets, (r) => r.brand)
+  const stakeholderAgingSplit = sortAgingBuckets(groupCount(allStakeholderTickets, (r) => r.agingBucket))
+  const stakeholderProjectAreaSplit = groupCount(allStakeholderTickets, (r) => r.projectNameFromDesc || r.projectTag || 'Untagged')
+
+  // Completed tab charts
+  const completedBrandSplit = groupCount(completedTickets, (r) => r.brand)
+  const completedResolutionSplit = groupCount(completedTickets, (r) => (r.resolved || '').slice(0, 7) || 'Unknown')
+
+  const initiativeTickets = projectFilteredTickets.filter((t) => ['Initiative', 'Epic', 'Capability'].includes(t.issueType) || t.category === 'Strategic')
+  const overdueTickets = projectFilteredTickets.filter((t) => t.isOverdue)
+  const overdue = overdueTickets.length
+
 
   const columns: ColumnDef<Ticket>[] = [
     {
@@ -589,7 +683,7 @@ function App() {
         </a>
       ),
     },
-    { key: 'summary', label: 'Summary', value: (r) => r.summary },
+    { key: 'summary', label: 'Summary', value: (r) => r.summary, width: '30%' },
     { key: 'status', label: 'Status', value: (r) => r.status },
     {
       key: 'rag',
@@ -599,17 +693,77 @@ function App() {
     },
     { key: 'agingDays', label: 'Aging (days)', value: (r) => signedAgingDays(r.dueDate ?? r.endDate) ?? '' },
     { key: 'agingBucket', label: 'Aging Bucket', value: (r) => r.agingBucket },
-    { key: 'startDate', label: 'Start', value: (r) => r.startDate ?? '' },
     { key: 'endDate', label: 'End (Due date)', value: (r) => r.dueDate ?? r.endDate ?? '' },
     { key: 'assignee', label: 'Assignee', value: (r) => r.assignee ?? '' },
-    { key: 'reporter', label: 'Reporter', value: (r) => r.reporter ?? '' },
     { key: 'priority', label: 'Priority', value: (r) => r.priority ?? '' },
-    { key: 'issueType', label: 'Type', value: (r) => r.issueType },
-    { key: 'category', label: 'Category', value: (r) => r.category },
-    { key: 'stream', label: 'Demand/Delivery', value: (r) => r.stream },
     { key: 'brand', label: 'Brand', value: (r) => r.brand },
-    { key: 'projectKey', label: 'Project', value: (r) => r.projectKey },
-    { key: 'projectType', label: 'Project Type', value: (r) => r.projectTypeValue || 'Not yet classified' },
+    {
+      key: 'project',
+      label: 'Project',
+      value: (r) => projectById.get(r.projectTag ?? '')?.name ?? r.projectNameFromDesc ?? r.projectTag ?? '',
+      render: (r) => {
+        const proj = projectById.get(r.projectTag ?? '')
+        const name = proj?.name ?? r.projectNameFromDesc ?? r.projectTag ?? null
+        if (!name) return <span className="text-slate-600">—</span>
+        const colour = proj?.colour ?? '#94a3b8'
+        return <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold" style={{ backgroundColor: colour + '33', color: colour }}><span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: colour }} />{name}</span>
+      },
+    },
+  ]
+
+  const otherContactColumns: ColumnDef<Ticket>[] = [
+    {
+      key: 'key',
+      label: 'Key',
+      value: (r) => r.key,
+      render: (r) => (
+        <a href={r.url} target="_blank" rel="noreferrer" className="font-semibold text-cyan-300 underline">
+          {r.key}
+        </a>
+      ),
+    },
+    { key: 'summary', label: 'Summary', value: (r) => r.summary, width: '30%' },
+    { key: 'status', label: 'Status', value: (r) => r.status },
+    {
+      key: 'rag',
+      label: 'RAG',
+      value: (r) => r.rag,
+      render: (r) => <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${ragClass(r.rag)}`}>{r.rag}</span>,
+    },
+    { key: 'agingDays', label: 'Aging (days)', value: (r) => signedAgingDays(r.dueDate ?? r.endDate) ?? '' },
+    { key: 'endDate', label: 'End (Due date)', value: (r) => r.dueDate ?? r.endDate ?? '' },
+    { key: 'businessContact', label: 'Contact (Owner)', value: (r) => r.businessContact ?? '' },
+    { key: 'priority', label: 'Priority', value: (r) => r.priority ?? '' },
+    { key: 'brand', label: 'Brand', value: (r) => r.brand },
+    {
+      key: 'project',
+      label: 'Project',
+      value: (r) => projectById.get(r.projectTag ?? '')?.name ?? r.projectNameFromDesc ?? r.projectTag ?? '',
+      render: (r) => {
+        const proj = projectById.get(r.projectTag ?? '')
+        const name = proj?.name ?? r.projectNameFromDesc ?? r.projectTag ?? null
+        if (!name) return <span className="text-slate-600">—</span>
+        const colour = proj?.colour ?? '#94a3b8'
+        return <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold" style={{ backgroundColor: colour + '33', color: colour }}><span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: colour }} />{name}</span>
+      },
+    },
+  ]
+
+  const decisionColumns: ColumnDef<Ticket>[] = [
+    {
+      key: 'key',
+      label: 'Key',
+      value: (r) => r.key,
+      render: (r) => (
+        <a href={r.url} target="_blank" rel="noreferrer" className="font-semibold text-violet-300 underline">
+          {r.key}
+        </a>
+      ),
+    },
+    { key: 'summary', label: 'Decision', value: (r) => r.summary, width: '40%' },
+    { key: 'businessContact', label: 'Owner', value: (r) => r.businessContact ?? '' },
+    { key: 'startDate', label: 'Date Decided', value: (r) => r.startDate ?? '' },
+    { key: 'projectNameFromDesc', label: 'Project', value: (r) => r.projectNameFromDesc ?? '' },
   ]
 
   const completedColumns: ColumnDef<Ticket>[] = [
@@ -623,10 +777,15 @@ function App() {
         </a>
       ),
     },
-    { key: 'summary', label: 'Summary', value: (r) => r.summary },
+    { key: 'summary', label: 'Summary', value: (r) => r.summary, width: '30%' },
     { key: 'status', label: 'Status', value: (r) => r.status },
-    { key: 'startDate', label: 'Start', value: (r) => r.startDate ?? '' },
-    { key: 'dueDate', label: 'Due Date', value: (r) => r.dueDate ?? r.endDate ?? '' },
+    {
+      key: 'rag',
+      label: 'RAG',
+      value: (r) => r.rag,
+      render: (r) => <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${ragClass(r.rag)}`}>{r.rag}</span>,
+    },
+    { key: 'endDate', label: 'End (Due date)', value: (r) => r.dueDate ?? r.endDate ?? '' },
     { key: 'resolved', label: 'Resolved', value: (r) => r.resolved ?? '' },
     {
       key: 'deliveryOutcome',
@@ -634,42 +793,35 @@ function App() {
       value: (r) => deliveryOutcome(r.resolved, r.dueDate ?? r.endDate),
     },
     { key: 'assignee', label: 'Assignee', value: (r) => r.assignee ?? '' },
-    { key: 'reporter', label: 'Reporter', value: (r) => r.reporter ?? '' },
-    { key: 'issueType', label: 'Type', value: (r) => r.issueType },
-    { key: 'category', label: 'Category', value: (r) => r.category },
+    { key: 'priority', label: 'Priority', value: (r) => r.priority ?? '' },
     { key: 'brand', label: 'Brand', value: (r) => r.brand },
-    { key: 'projectKey', label: 'Project', value: (r) => r.projectKey },
-    { key: 'projectType', label: 'Project Type', value: (r) => r.projectTypeValue || 'Not yet classified' },
   ]
 
-  const newTicketColumns: ColumnDef<Ticket>[] = [
-    {
-      key: 'key',
-      label: 'Key',
-      value: (r) => r.key,
-      render: (r) => (
-        <a href={r.url} target="_blank" rel="noreferrer" className="font-semibold text-cyan-300 underline">
-          {r.key}
-        </a>
-      ),
-    },
-    { key: 'summary', label: 'Summary', value: (r) => r.summary },
-    { key: 'status', label: 'Status', value: (r) => r.status },
-    {
-      key: 'created',
-      label: 'Created',
-      value: (r) => (r.created ? new Date(r.created).toLocaleString() : ''),
-    },
-    { key: 'assignee', label: 'Assignee', value: (r) => r.assignee ?? '' },
-    { key: 'issueType', label: 'Type', value: (r) => r.issueType },
-    { key: 'projectKey', label: 'Project', value: (r) => r.projectKey },
-  ]
+  const spotlightData = useMemo((): { title: string; rows: Ticket[]; cols: ColumnDef<Ticket>[] } | null => {
+    if (!spotlight) return null
+    switch (spotlight) {
+      case 'initiatives': return { title: 'Total Initiatives', rows: initiativeTickets, cols: columns }
+      case 'overdue': return { title: 'Overdue Tickets', rows: overdueTickets, cols: columns }
+      case 'completed': return { title: 'Completed Tickets', rows: completedTickets, cols: completedColumns }
+      case 'active': return { title: 'Active Tickets', rows: myAllTickets, cols: columns }
+      case 'all': return { title: 'All Tickets', rows: projectFilteredTickets, cols: columns }
+      default: return null
+    }
+  }, [spotlight, projectFilteredTickets, initiativeTickets, overdueTickets, completedTickets, myAllTickets, columns, completedColumns])
 
   const onRefresh = async () => {
     setIsRefreshing(true)
     setRefreshError(null)
     try {
-      const latest = await refreshFromJira(reportData)
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      const latest = await refreshFromJira(reportData, {
+        token,
+        accountId: workspace?.jiraAccountId,
+        defaultJql: workspace?.jiraDefaultJql,
+        jiraInstanceUrl: workspace?.jiraInstanceUrl,
+        brands: workspace?.brands,
+      })
       setReportData(latest)
     } catch (err: any) {
       setRefreshError(err?.message || 'Failed to refresh')
@@ -691,48 +843,34 @@ function App() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_20%_0%,#0f2a5a_0%,#030b1f_40%,#020617_100%)] p-4 text-slate-100 md:p-8">
       <div className="mx-auto max-w-[1500px] space-y-6">
-        {/* Tab switcher */}
-        <div className="flex gap-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-2">
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${activeTab === 'dashboard' ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-700' : 'text-slate-400 hover:text-slate-200'}`}
-          >
-            Jira Dashboard
-          </button>
-          <button
-            onClick={() => setActiveTab('meetings')}
-            className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${activeTab === 'meetings' ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-700' : 'text-slate-400 hover:text-slate-200'}`}
-          >
-            Meeting Intelligence
-          </button>
-        </div>
-
-        {/* Meetings tab */}
-        {activeTab === 'meetings' && (
-          <div>
-            <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
-              <h1 className="text-4xl font-bold tracking-tight text-white">Meeting Intelligence</h1>
-              <p className="mt-1 text-sm text-slate-400">Upload a Copilot meeting extract to extract actions, create Jira tickets, and draft follow-up emails.</p>
-            </div>
-            <MeetingsTab />
-          </div>
-        )}
-
-        {/* Dashboard tab */}
-        {activeTab === 'dashboard' && <>
         <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
           <div>
-            <h1 className="text-4xl font-bold tracking-tight text-white">Jira Work Intelligence</h1>
-            <p className="mt-1 text-sm text-slate-400">{summary.scopeNote}</p>
+            <h1 className="text-4xl font-bold tracking-tight text-white">Personal Planning Dashboard</h1>
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => setActiveTab('dashboard')}
+                className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${activeTab === 'dashboard' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+              >Dashboard</button>
+              <button
+                onClick={() => setActiveTab('meetings')}
+                className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${activeTab === 'meetings' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+              >Meetings</button>
+              <button
+                onClick={() => setActiveTab('reference')}
+                className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${activeTab === 'reference' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+              >Reference Docs</button>
+              <button
+                onClick={() => setActiveTab('settings')}
+                className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${activeTab === 'settings' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+              >Settings</button>
+            </div>
+            {summary.scopeNote && <p className="mt-1 text-sm text-slate-400">{summary.scopeNote}</p>}
             <p className="mt-1 text-xs text-slate-500">
               Owner: {summary.owner.name} | Generated: {new Date(summary.generatedAt).toLocaleString()}
             </p>
-            {!USER_ID ? (
-              <p className="mt-1 text-xs text-amber-300">Setup hint: set `VITE_USER_ID` to use authenticated Jira proxy requests.</p>
-            ) : null}
             {refreshError ? <p className="mt-1 text-xs text-rose-300">Refresh failed: {refreshError}</p> : null}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             {!hasInitialLoadCompleted ? (
               <span className="rounded-xl border border-amber-600/50 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200">
                 {isRefreshing ? 'Loading latest Jira data...' : 'Starting data load...'}
@@ -745,25 +883,6 @@ function App() {
             >
               {isRefreshing ? 'Refreshing...' : 'Refresh'}
             </button>
-            {GOOGLE_SIGN_IN_URL ? (
-              <a
-                href={GOOGLE_SIGN_IN_URL}
-                className="rounded-xl border border-emerald-700 bg-emerald-600/20 px-3 py-2 text-sm font-semibold text-emerald-200"
-              >
-                Sign in with Google
-              </a>
-            ) : null}
-            <select
-              value={selectedProjectType}
-              onChange={(e) => setSelectedProjectType(e.target.value)}
-              className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200"
-            >
-              {PROJECT_TYPE_OPTIONS.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
             <select
               value={periodKey}
               onChange={(e) => setPeriodKey(e.target.value)}
@@ -775,117 +894,177 @@ function App() {
                 </option>
               ))}
             </select>
+            <UserButton afterSignOutUrl="/" />
           </div>
         </header>
 
-        <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p className="text-sm text-slate-400">Total Initiatives</p><p className="mt-1 text-4xl font-bold text-cyan-300">{totalInitiatives}</p></div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p className="text-sm text-slate-400">Overdue</p><p className="mt-1 text-4xl font-bold text-rose-300">{overdue}</p></div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p className="text-sm text-slate-400">Completed</p><p className="mt-1 text-4xl font-bold text-emerald-300">{completed}</p></div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p className="text-sm text-slate-400">Active</p><p className="mt-1 text-4xl font-bold text-violet-300">{activeTickets.length}</p></div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p className="text-sm text-slate-400">New (24h)</p><p className="mt-1 text-4xl font-bold text-amber-300">{newTicketsLast24h.length}</p></div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+        {activeTab === 'meetings' ? <MeetingsTab /> : null}
+        {activeTab === 'reference' ? <ReferenceDocsTab /> : null}
+        {activeTab === 'settings' ? <SettingsTab /> : null}
+
+        {activeTab === 'dashboard' ? <><section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <button onClick={() => setSpotlight('all')} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-left transition hover:border-sky-700 hover:bg-slate-800/70">
             <p className="text-sm text-slate-400">All Tickets</p>
             <p className="mt-1 text-4xl font-bold text-sky-300">{projectFilteredTickets.length}</p>
-            <p className="mt-1 text-xs text-slate-400">Active: {activeTickets.length} | Completed: {completed}</p>
-          </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p className="text-sm text-slate-400">View</p><p className="mt-1 text-2xl font-bold text-amber-300">{selected.label}</p><p className="text-xs text-slate-400">{selectedProjectType}</p></div>
+            <p className="mt-1 text-xs text-slate-400">Active: {projectFilteredTickets.filter((t) => t.active).length} | Completed: {completedTickets.length}</p>
+          </button>
+          <button onClick={() => setSpotlight('completed')} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-left transition hover:border-emerald-700 hover:bg-slate-800/70"><p className="text-sm text-slate-400">Completed</p><p className="mt-1 text-4xl font-bold text-emerald-300">{completedTickets.length}</p></button>
+          <button onClick={() => setSpotlight('overdue')} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-left transition hover:border-rose-700 hover:bg-slate-800/70"><p className="text-sm text-slate-400">Overdue</p><p className="mt-1 text-4xl font-bold text-rose-300">{overdue}</p></button>
+          <button onClick={() => setSpotlight('active')} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-left transition hover:border-violet-700 hover:bg-slate-800/70"><p className="text-sm text-slate-400">Active</p><p className="mt-1 text-4xl font-bold text-violet-300">{projectFilteredTickets.filter((t) => t.active).length}</p></button>
         </section>
+
+        {spotlightData ? (
+          <SpotlightModal
+            title={spotlightData.title}
+            rows={spotlightData.rows}
+            columns={spotlightData.cols}
+            onClose={() => setSpotlight(null)}
+          />
+        ) : null}
+
+        {pieSpotlight ? (
+          <SpotlightModal
+            title={pieSpotlight.title}
+            rows={pieSpotlight.rows}
+            columns={pieSpotlight.cols ?? columns}
+            onClose={() => setPieSpotlight(null)}
+          />
+        ) : null}
 
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-            <h2 className="mb-3 text-lg font-semibold">Project Type Split</h2>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={projectTypeSplit} dataKey="value" nameKey="name" outerRadius={90}>
-                    {projectTypeSplit.map((entry, idx) => (
-                      <Cell key={entry.name} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
+          {dashTab === 'my' && <>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Brand Scope</h2>
+              <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={brandSplit} dataKey="value" nameKey="name" outerRadius={90} cursor="pointer" onClick={(e) => setPieSpotlight({ title: `Brand: ${e.name}`, rows: myAllTickets.filter((t) => t.brand === e.name) })}>{brandSplit.map((e, i) => <Cell key={e.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
+              <ClickablePieLegend data={brandSplit} onSelect={(name) => setPieSpotlight({ title: `Brand: ${name}`, rows: myAllTickets.filter((t) => t.brand === name) })} />
             </div>
-            <PieLegendList data={projectTypeSplit} />
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-            <h2 className="mb-3 text-lg font-semibold">Brand Split</h2>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={brandSplit} dataKey="value" nameKey="name" outerRadius={90}>
-                    {brandSplit.map((entry, idx) => (
-                      <Cell key={entry.name} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Ticket Aging</h2>
+              <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={agingSplit} dataKey="value" nameKey="name" outerRadius={90} cursor="pointer" onClick={(e) => setPieSpotlight({ title: `Aging: ${e.name}`, rows: myAllTickets.filter((t) => normalizeAgingBucket(t.agingBucket) === e.name) })}>{agingSplit.map((e, i) => <Cell key={e.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
+              <ClickablePieLegend data={agingSplit} onSelect={(name) => setPieSpotlight({ title: `Aging: ${name}`, rows: myAllTickets.filter((t) => normalizeAgingBucket(t.agingBucket) === name) })} />
             </div>
-            <PieLegendList data={brandSplit} />
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-            <h2 className="mb-3 text-lg font-semibold">Aging Split (Pie)</h2>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={agingSplit} dataKey="value" nameKey="name" outerRadius={90}>
-                    {agingSplit.map((entry, idx) => (
-                      <Cell key={entry.name} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Project Area</h2>
+              <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={projectTagSplit} dataKey="value" nameKey="name" outerRadius={90} cursor="pointer" onClick={(e) => setPieSpotlight({ title: `Project Area: ${e.name}`, rows: myAllTickets.filter((t) => (t.projectNameFromDesc || t.projectTag || 'Untagged') === e.name) })}>{projectTagSplit.map((e, i) => <Cell key={e.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
+              <ClickablePieLegend data={projectTagSplit} onSelect={(name) => setPieSpotlight({ title: `Project Area: ${name}`, rows: myAllTickets.filter((t) => (t.projectNameFromDesc || t.projectTag || 'Untagged') === name) })} />
             </div>
-            <PieLegendList data={agingSplit} />
-          </div>
+          </>}
+          {dashTab === 'stakeholder' && <>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Brand Scope</h2>
+              <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={stakeholderBrandSplit} dataKey="value" nameKey="name" outerRadius={90} cursor="pointer" onClick={(e) => setPieSpotlight({ title: `Brand: ${e.name}`, rows: allStakeholderTickets.filter((t) => t.brand === e.name) })}>{stakeholderBrandSplit.map((e, i) => <Cell key={e.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
+              <ClickablePieLegend data={stakeholderBrandSplit} onSelect={(name) => setPieSpotlight({ title: `Brand: ${name}`, rows: allStakeholderTickets.filter((t) => t.brand === name) })} />
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Ticket Aging</h2>
+              <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={stakeholderAgingSplit} dataKey="value" nameKey="name" outerRadius={90} cursor="pointer" onClick={(e) => setPieSpotlight({ title: `Aging: ${e.name}`, rows: allStakeholderTickets.filter((t) => normalizeAgingBucket(t.agingBucket) === e.name) })}>{stakeholderAgingSplit.map((e, i) => <Cell key={e.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
+              <ClickablePieLegend data={stakeholderAgingSplit} onSelect={(name) => setPieSpotlight({ title: `Aging: ${name}`, rows: allStakeholderTickets.filter((t) => normalizeAgingBucket(t.agingBucket) === name) })} />
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Project Area</h2>
+              <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={stakeholderProjectAreaSplit} dataKey="value" nameKey="name" outerRadius={90} cursor="pointer" onClick={(e) => setPieSpotlight({ title: `Project Area: ${e.name}`, rows: allStakeholderTickets.filter((t) => (t.projectNameFromDesc || t.projectTag || 'Untagged') === e.name) })}>{stakeholderProjectAreaSplit.map((e, i) => <Cell key={e.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
+              <ClickablePieLegend data={stakeholderProjectAreaSplit} onSelect={(name) => setPieSpotlight({ title: `Project Area: ${name}`, rows: allStakeholderTickets.filter((t) => (t.projectNameFromDesc || t.projectTag || 'Untagged') === name) })} />
+            </div>
+          </>}
+          {dashTab === 'completed' && <>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Brand Scope</h2>
+              <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={completedBrandSplit} dataKey="value" nameKey="name" outerRadius={90} cursor="pointer" onClick={(e) => setPieSpotlight({ title: `Brand: ${e.name}`, rows: completedTickets.filter((t) => t.brand === e.name) })}>{completedBrandSplit.map((e, i) => <Cell key={e.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
+              <ClickablePieLegend data={completedBrandSplit} onSelect={(name) => setPieSpotlight({ title: `Brand: ${name}`, rows: completedTickets.filter((t) => t.brand === name) })} />
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+              <h2 className="mb-3 text-lg font-semibold">Resolved By Month</h2>
+              <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={completedResolutionSplit} dataKey="value" nameKey="name" outerRadius={90} cursor="pointer" onClick={(e) => setPieSpotlight({ title: `Resolved: ${e.name}`, rows: completedTickets.filter((t) => (t.resolved || '').slice(0, 7) === e.name) })}>{completedResolutionSplit.map((e, i) => <Cell key={e.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
+              <ClickablePieLegend data={completedResolutionSplit} onSelect={(name) => setPieSpotlight({ title: `Resolved: ${name}`, rows: completedTickets.filter((t) => (t.resolved || '').slice(0, 7) === name) })} />
+            </div>
+          </>}
+          {dashTab === 'decisions' && decisionTickets.length > 0 && (() => {
+            const decByProject = groupCount(decisionTickets, (r) => r.projectNameFromDesc || r.projectTag || 'Untagged')
+            return <>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                <h2 className="mb-3 text-lg font-semibold">By Project</h2>
+                <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={decByProject} dataKey="value" nameKey="name" outerRadius={90} cursor="pointer" onClick={(e) => setPieSpotlight({ title: `Project: ${e.name}`, rows: decisionTickets.filter((t) => (t.projectNameFromDesc || t.projectTag || 'Untagged') === e.name), cols: decisionColumns })}>{decByProject.map((e, i) => <Cell key={e.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer></div>
+                <ClickablePieLegend data={decByProject} onSelect={(name) => setPieSpotlight({ title: `Project: ${name}`, rows: decisionTickets.filter((t) => (t.projectNameFromDesc || t.projectTag || 'Untagged') === name), cols: decisionColumns })} />
+              </div>
+            </>
+          })()}
         </section>
 
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-          <h2 className="mb-3 text-lg font-semibold">Aging (Active Tickets)</h2>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={agingSplit}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                <XAxis dataKey="name" stroke="#cbd5e1" />
-                <YAxis allowDecimals={false} stroke="#cbd5e1" />
-                <Tooltip />
-                <Bar dataKey="value" fill="#f97316" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/70">
+          <div className="flex border-b border-slate-800">
+            {([['my', 'My Tickets'], ['stakeholder', 'Stakeholder'], ['completed', 'Completed'], ['decisions', 'Decisions']] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setDashTab(key)}
+                className={`px-6 py-3 text-sm font-medium transition-colors ${dashTab === key ? 'border-b-2 border-cyan-400 text-cyan-300' : 'text-slate-400 hover:text-slate-200'}`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-        </section>
-
-        <SortableFilterableTable<Ticket>
-          title="New Tickets (Last 24 Hours)"
-          rows={newTicketsLast24h}
-          columns={newTicketColumns}
-          defaultSortKey="created"
-          defaultSortDir="desc"
-        />
-
-        <SortableFilterableTable<Ticket>
-          title="Active Tickets / Initiatives"
-          rows={activeTickets}
-          columns={columns}
-          defaultSortKey="agingDays"
-          defaultSortDir="desc"
-        />
-        <SortableFilterableTable<Ticket>
-          title="Completed Tickets"
-          rows={completedTickets}
-          columns={completedColumns}
-          defaultSortKey="resolved"
-          defaultSortDir="desc"
-        />
-        </>}
+          <div className="p-4">
+            {dashTab === 'my' && <>
+              <SortableFilterableTable<Ticket>
+                title="My Tickets"
+                rows={myAllTickets}
+                columns={columns}
+                defaultSortKey="agingDays"
+                defaultSortDir="desc"
+              />
+            </>}
+            {dashTab === 'stakeholder' && <>
+              <SortableFilterableTable<Ticket>
+                title="Stakeholder Commitments"
+                rows={[...pkpi2OtherTickets, ...stakeholderNonPkpi2Active]}
+                columns={otherContactColumns}
+                defaultSortKey="agingDays"
+                defaultSortDir="desc"
+              />
+              <SortableFilterableTable<Ticket>
+                title="Completed"
+                rows={stakeholderNonPkpi2Completed}
+                columns={completedColumns}
+                defaultSortKey="resolved"
+                defaultSortDir="desc"
+              />
+            </>}
+            {dashTab === 'completed' && <SortableFilterableTable<Ticket>
+              title="Completed Tickets"
+              rows={completedTickets}
+              columns={completedColumns}
+              defaultSortKey="resolved"
+              defaultSortDir="desc"
+            />}
+            {dashTab === 'decisions' && (
+              decisionsLoading ? (
+                <div className="flex items-center gap-2 py-8 text-slate-400">
+                  <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-violet-400" />
+                  Loading decisions from Jira...
+                </div>
+              ) : decisionsError ? (
+                <div className="space-y-2 py-4">
+                  <p className="text-sm text-rose-400">Failed to load decisions: {decisionsError}</p>
+                  <button
+                    onClick={() => { setDecisionTickets([]); setDecisionsError(null); setDashTab('my'); setTimeout(() => setDashTab('decisions'), 50) }}
+                    className="text-xs text-violet-400 hover:text-violet-300"
+                  >Retry</button>
+                </div>
+              ) : (
+                <SortableFilterableTable<Ticket>
+                  title="Decisions"
+                  rows={decisionTickets}
+                  columns={decisionColumns}
+                  defaultSortKey="created"
+                  defaultSortDir="desc"
+                />
+              )
+            )}
+          </div>
+        </div></> : null}
       </div>
     </div>
   )
 }
 
 export default App
+
