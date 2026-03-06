@@ -1,7 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { useAuth } from '@clerk/clerk-react'
-
-const R2_URL = ((import.meta as any).env?.VITE_R2_URL || 'https://r2.bashai.io').replace(/\/$/, '')
+import { createContext, useContext } from 'react'
 
 export type WorkspaceMember = {
   clerkUserId: string
@@ -17,15 +14,12 @@ export type WorkspaceConfig = {
   createdAt: string
   updatedAt?: string
   members: WorkspaceMember[]
-  // Jira integration settings (non-secret)
   jiraInstanceUrl?: string
   jiraProjectKey?: string
   jiraAccountId?: string
   jiraProjectKeys?: string[]
   jiraDefaultJql?: string
-  // Miro
   miroTeamId?: string
-  // User identity
   ownerName?: string
 }
 
@@ -44,99 +38,48 @@ type WorkspaceContextType = {
   removeMember: (userId: string) => Promise<void>
 }
 
-const WorkspaceContext = createContext<WorkspaceContextType | null>(null)
-
-async function apiFetch(path: string, token: string, opts?: RequestInit) {
-  const res = await fetch(`${R2_URL}${path}`, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...opts?.headers,
-    },
-  })
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(err || `API error ${res.status}`)
-  }
-  return res.json()
+// Static defaults — no auth required
+const defaultWorkspace: WorkspaceConfig = {
+  id: 'default',
+  name: 'Personal',
+  brands: ['Selleys', 'Yates'],
+  createdAt: new Date().toISOString(),
+  members: [],
+  jiraInstanceUrl: 'duluxgroup.atlassian.net',
+  jiraProjectKey: 'PKPI2',
+  jiraAccountId: '5f7a805b25fbdf00685e6cf8',
+  miroTeamId: '3458764661111748896',
+  ownerName: 'Simon Lobascher',
 }
 
+const noop = async () => {}
+
+const WorkspaceContext = createContext<WorkspaceContextType>({
+  workspace: defaultWorkspace,
+  integrations: {},
+  loading: false,
+  error: null,
+  isOwner: true,
+  reload: noop,
+  updateWorkspace: noop as any,
+  saveSecrets: noop as any,
+  inviteMember: async () => ({ inviteUrl: '' }),
+  removeMember: noop,
+})
+
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
-  const { getToken, userId } = useAuth()
-  const [workspace, setWorkspace] = useState<WorkspaceConfig | null>(null)
-  const [integrations, setIntegrations] = useState<IntegrationSummary>({})
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const isOwner = !!(workspace && userId && workspace.members?.some(m => m.clerkUserId === userId && m.role === 'owner'))
-
-  const reload = useCallback(async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      const token = await getToken()
-      if (!token) throw new Error('Not authenticated')
-
-      const [ws, secrets] = await Promise.all([
-        apiFetch('/config/workspace', token),
-        apiFetch('/config/secrets', token),
-      ])
-      setWorkspace(ws)
-      setIntegrations(secrets.integrations || {})
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load workspace')
-    } finally {
-      setLoading(false)
-    }
-  }, [getToken])
-
-  useEffect(() => { reload() }, [reload])
-
-  const updateWorkspace = useCallback(async (updates: Partial<Pick<WorkspaceConfig, 'name' | 'brands'>>) => {
-    const token = await getToken()
-    if (!token) throw new Error('Not authenticated')
-    const ws = await apiFetch('/config/workspace', token, {
-      method: 'PUT',
-      body: JSON.stringify(updates),
-    })
-    setWorkspace(ws)
-  }, [getToken])
-
-  const saveSecrets = useCallback(async (integration: string, secrets: Record<string, string>) => {
-    const token = await getToken()
-    if (!token) throw new Error('Not authenticated')
-    await apiFetch('/config/secrets', token, {
-      method: 'PUT',
-      body: JSON.stringify({ integration, secrets }),
-    })
-    const updated = await apiFetch('/config/secrets', token)
-    setIntegrations(updated.integrations || {})
-  }, [getToken])
-
-  const inviteMember = useCallback(async (email: string, role = 'member') => {
-    const token = await getToken()
-    if (!token) throw new Error('Not authenticated')
-    const result = await apiFetch('/config/invite', token, {
-      method: 'POST',
-      body: JSON.stringify({ email, role }),
-    })
-    return { inviteUrl: result.inviteUrl }
-  }, [getToken])
-
-  const removeMember = useCallback(async (targetUserId: string) => {
-    const token = await getToken()
-    if (!token) throw new Error('Not authenticated')
-    await apiFetch(`/config/members?userId=${encodeURIComponent(targetUserId)}`, token, {
-      method: 'DELETE',
-    })
-    await reload()
-  }, [getToken, reload])
-
   return (
     <WorkspaceContext.Provider value={{
-      workspace, integrations, loading, error, isOwner,
-      reload, updateWorkspace, saveSecrets, inviteMember, removeMember,
+      workspace: defaultWorkspace,
+      integrations: {},
+      loading: false,
+      error: null,
+      isOwner: true,
+      reload: noop,
+      updateWorkspace: noop as any,
+      saveSecrets: noop as any,
+      inviteMember: async () => ({ inviteUrl: '' }),
+      removeMember: noop,
     }}>
       {children}
     </WorkspaceContext.Provider>
@@ -144,7 +87,5 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useWorkspace() {
-  const ctx = useContext(WorkspaceContext)
-  if (!ctx) throw new Error('useWorkspace must be used within WorkspaceProvider')
-  return ctx
+  return useContext(WorkspaceContext)
 }

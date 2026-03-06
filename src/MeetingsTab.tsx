@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { unzipSync } from 'fflate';
-import { useAuth } from '@clerk/clerk-react';
 import { useWorkspace } from './WorkspaceContext';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -122,17 +121,14 @@ function projectLabelSlug(id: string) {
   return `project-${id.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
 }
 
-// Module-level token — set by component on mount/token refresh
-let _authToken = '';
-function setAuthToken(t: string) { _authToken = t; }
+const R2_SECRET = (import.meta as any).env?.VITE_R2_TOKEN || 'f60350db4573f75632476ab1e039a67515a6c5240fc8c6dd4d9319fe80bef146';
 
 async function r2Fetch(path: string, opts: RequestInit = {}) {
-  if (!_authToken) throw new Error('Not authenticated');
   return fetch(`${R2_URL}${path}`, {
     ...opts,
     credentials: 'omit',
     headers: {
-      Authorization: `Bearer ${_authToken}`,
+      Authorization: `Bearer ${R2_SECRET}`,
       ...(opts.headers || {}),
     },
   });
@@ -920,8 +916,6 @@ async function uploadRefDocs(
 
 // ── ReferenceDocsTab component ─────────────────────────────────────────────────
 export function ReferenceDocsTab() {
-  const { getToken } = useAuth();
-  useEffect(() => { getToken().then(t => { if (t) setAuthToken(t); }); }, [getToken]);
   const [docs, setDocs] = useState<RefDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
@@ -1120,8 +1114,6 @@ export function ReferenceDocsTab() {
 function MiroSection({ meeting, meetingKey }: { meeting: MeetingData; meetingKey: string }) {
   const { workspace } = useWorkspace();
   const miroTeamId = workspace?.miroTeamId || '';
-  const { getToken } = useAuth();
-  useEffect(() => { getToken().then(t => { if (t) setAuthToken(t); }); }, [getToken]);
   const [prompt, setPrompt] = useState('');
   const [genState, setGenState] = useState<'idle' | 'generating' | 'done' | 'error'>('idle');
   const [genError, setGenError] = useState<string | null>(null);
@@ -1382,10 +1374,8 @@ function MeetingDetail({ meetingKey, onBack, projects, onProjectsChange, contact
   contacts: Contact[]; onContactsChange: (c: Contact[]) => void;
 }) {
   const { workspace } = useWorkspace();
-  const { getToken } = useAuth();
   const jiraInstanceUrl = workspace?.jiraInstanceUrl || 'duluxgroup.atlassian.net';
   const jiraBrowseUrl = `https://${jiraInstanceUrl}/browse`;
-  useEffect(() => { getToken().then(t => { if (t) setAuthToken(t); }); }, [getToken]);
   const [meeting, setMeeting] = useState<MeetingData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1642,8 +1632,6 @@ function MeetingDetail({ meetingKey, onBack, projects, onProjectsChange, contact
 function MeetingsList({ onSelect, refresh, onRefresh }: {
   onSelect: (key: string) => void; refresh: number; onRefresh: () => void;
 }) {
-  const { getToken } = useAuth();
-  useEffect(() => { getToken().then(t => { if (t) setAuthToken(t); }); }, [getToken]);
   const [meetings, setMeetings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1718,10 +1706,9 @@ function MeetingsList({ onSelect, refresh, onRefresh }: {
 
 // ── MeetingsTab main component ─────────────────────────────────────────────────
 export function MeetingsTab() {
-  const { getToken } = useAuth();
   const { workspace } = useWorkspace();
   const jiraProjectKey = workspace?.jiraProjectKey || 'PKPI2';
-  const jiraAccountId = workspace?.jiraAccountId || '';
+  const jiraAccountId = workspace?.jiraAccountId || '5f7a805b25fbdf00685e6cf8';
   const wsOwnerName = workspace?.ownerName || 'Simon Lobascher';
 
   const [status, setStatus] = useState<{ stage: string; message: string }>({ stage: 'idle', message: '' });
@@ -1740,16 +1727,10 @@ export function MeetingsTab() {
   const [selectedProject, setSelectedProject] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Set auth token for r2Fetch on mount and load data
   useEffect(() => {
-    getToken().then(t => {
-      if (t) {
-        setAuthToken(t);
-        loadProjects().then(setProjects);
-        loadContacts().then(setContacts);
-      }
-    });
-  }, [getToken]);
+    loadProjects().then(setProjects);
+    loadContacts().then(setContacts);
+  }, []);
 
   const processFile = async (file: File) => {
     if (!file.name.endsWith('.docx')) {
