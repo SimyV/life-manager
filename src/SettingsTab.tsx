@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useUser } from '@clerk/clerk-react'
 import { useWorkspace } from './WorkspaceContext'
 
 function Input({ label, value, onChange, placeholder, type = 'text' }: {
@@ -48,6 +49,7 @@ function StatusMessage({ error, success }: { error: string | null; success: stri
 
 export default function SettingsTab() {
   const { workspace, integrations, isOwner, updateWorkspace, saveSecrets, inviteMember, removeMember } = useWorkspace()
+  const { user } = useUser()
 
   // Workspace settings
   const [wsName, setWsName] = useState(workspace?.name || '')
@@ -61,7 +63,6 @@ export default function SettingsTab() {
   const [jiraInstanceUrl, setJiraInstanceUrl] = useState(workspace?.jiraInstanceUrl || '')
   const [jiraProjectKey, setJiraProjectKey] = useState(workspace?.jiraProjectKey || '')
   const [jiraAccountId, setJiraAccountId] = useState(workspace?.jiraAccountId || '')
-  const [jiraDefaultJql, setJiraDefaultJql] = useState(workspace?.jiraDefaultJql || '')
   const [jiraSaving, setJiraSaving] = useState(false)
   const [jiraError, setJiraError] = useState<string | null>(null)
   const [jiraSuccess, setJiraSuccess] = useState<string | null>(null)
@@ -90,6 +91,14 @@ export default function SettingsTab() {
   const jiraSecretsConfigured = integrations.jira?.length > 0
   const miroSecretsConfigured = integrations.miro?.length > 0
 
+  // Resolve member display name — use Clerk user info for current user, email for others
+  const memberDisplayName = (m: { clerkUserId: string; email: string }) => {
+    if (user && m.clerkUserId === user.id) {
+      return user.fullName || user.primaryEmailAddress?.emailAddress || m.email || m.clerkUserId
+    }
+    return m.email || m.clerkUserId
+  }
+
   const onSaveWorkspace = async () => {
     setWsSaving(true); setWsError(null); setWsSuccess(null)
     try {
@@ -103,7 +112,7 @@ export default function SettingsTab() {
   const onSaveJiraSettings = async () => {
     setJiraSaving(true); setJiraError(null); setJiraSuccess(null)
     try {
-      await updateWorkspace({ jiraInstanceUrl, jiraProjectKey, jiraAccountId, jiraDefaultJql })
+      await updateWorkspace({ jiraInstanceUrl, jiraProjectKey, jiraAccountId })
       setJiraSuccess('Jira settings updated')
     } catch (err: any) { setJiraError(err?.message || 'Failed') }
     finally { setJiraSaving(false) }
@@ -171,16 +180,6 @@ export default function SettingsTab() {
         <Input label="Jira Instance URL" value={jiraInstanceUrl} onChange={setJiraInstanceUrl} placeholder="yourcompany.atlassian.net" />
         <Input label="Default Project Key (for ticket creation)" value={jiraProjectKey} onChange={setJiraProjectKey} placeholder="PROJ" />
         <Input label="Your Jira Account ID" value={jiraAccountId} onChange={setJiraAccountId} placeholder="Your Atlassian account ID" />
-        <div>
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-400">Default JQL Query</label>
-          <textarea
-            value={jiraDefaultJql}
-            onChange={(e) => setJiraDefaultJql(e.target.value)}
-            placeholder="(assignee = currentUser() OR reporter = currentUser())"
-            rows={3}
-            className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500"
-          />
-        </div>
         <div className="flex items-center gap-3">
           <SaveButton onClick={onSaveJiraSettings} saving={jiraSaving} />
           <StatusMessage error={jiraError} success={jiraSuccess} />
@@ -195,7 +194,7 @@ export default function SettingsTab() {
           </p>
         )}
         <Input label="Jira Host (full URL)" value={jiraHost} onChange={setJiraHost} placeholder="https://yourcompany.atlassian.net" />
-        <Input label="Jira Email" value={jiraEmail} onChange={setJiraEmail} placeholder="you@company.com" type="email" />
+        <Input label="Org Email (use your bashai.io email if no org email)" value={jiraEmail} onChange={setJiraEmail} placeholder="you@company.com" type="email" />
         <Input label="Jira API Token" value={jiraApiToken} onChange={setJiraApiToken} placeholder="Enter API token" type="password" />
         <div className="flex items-center gap-3">
           <SaveButton onClick={onSaveJiraSecrets} saving={jiraSecretSaving} label="Save Credentials" />
@@ -210,7 +209,7 @@ export default function SettingsTab() {
             Miro API key is configured. Enter a new value below to update.
           </p>
         )}
-        <Input label="Miro Team ID (optional)" value={miroTeamId} onChange={setMiroTeamId} placeholder="Team ID for board creation" />
+        <Input label="Miro Team ID" value={miroTeamId} onChange={setMiroTeamId} placeholder="Your Miro team ID" />
         <Input label="Miro API Key" value={miroApiKey} onChange={setMiroApiKey} placeholder="Enter Miro API key" type="password" />
         <div className="flex items-center gap-3">
           <SaveButton onClick={onSaveMiro} saving={miroSaving} />
@@ -224,7 +223,7 @@ export default function SettingsTab() {
           {(workspace?.members || []).map((m) => (
             <div key={m.clerkUserId} className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3">
               <div>
-                <p className="text-sm text-slate-200">{m.email || m.clerkUserId}</p>
+                <p className="text-sm text-slate-200">{memberDisplayName(m)}</p>
                 <p className="text-xs text-slate-500">
                   {m.role} | joined {new Date(m.joinedAt).toLocaleDateString()}
                 </p>
