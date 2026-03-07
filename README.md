@@ -9,9 +9,9 @@ A Jira-integrated personal dashboard built with Vite, React, TypeScript, and Tai
 - **Vite** + **React** + **TypeScript**
 - **Tailwind CSS** for styling
 - **Jira REST API** via server-side proxy
-- **Google Sign-In** for authentication
+- **Clerk** for authentication (`@clerk/clerk-react`)
 - **recharts** for data visualisations (bar, pie charts)
-- **jszip** for .docx file extraction
+- **fflate** for .docx file extraction
 
 ---
 
@@ -30,7 +30,7 @@ cp .env.example .env
 3. Set values in `.env`:
 - `VITE_USER_ID`: your user ID used by the Jira proxy for auth.
 - `VITE_JIRA_PROXY_BASE`: leave default unless your proxy path differs.
-- `VITE_GOOGLE_SIGN_IN_URL`: Google sign-in URL for the app.
+- `VITE_CLERK_PUBLISHABLE_KEY`: Clerk publishable key for authentication.
 - `VITE_R2_URL`: base URL of the R2 worker used for meeting data storage and AI parsing.
 - `VITE_R2_SECRET`: bearer token for authenticating with the R2 worker.
 - `VITE_OUTLOOK_BRIDGE_URL`: URL of the Windows Outlook bridge for sending meeting invites (optional).
@@ -66,7 +66,7 @@ The app includes an AI-powered **Meeting Notes** tab for parsing and actioning m
 
 ### Features
 
-- **Upload a `.docx` file** -- drag and drop a meeting notes document; the app extracts the raw text using JSZip
+- **Upload a `.docx` file** -- drag and drop a meeting notes document; the app extracts the raw text using fflate
 - **AI parsing** -- the text is sent to a serverless R2 worker which uses Claude to extract:
   - Meeting title, date, participants
   - Key discussion points
@@ -97,7 +97,7 @@ Build the app and deploy the `dist/` folder to any static hosting provider. The 
 
 1. **SPA routing fallback** -- all paths should serve `index.html` (configure via your web server or `.htaccess`)
 2. **Jira API proxy** -- requests to `/api/proxy/jira/*` must be routed to your backend proxy
-3. **Environment variables** set at build time (`VITE_USER_ID`, `VITE_GOOGLE_SIGN_IN_URL`, `VITE_JIRA_PROXY_BASE`)
+3. **Environment variables** set at build time (`VITE_USER_ID`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_JIRA_PROXY_BASE`)
 
 ```bash
 npm ci
@@ -113,4 +113,4 @@ MIT
 
 ---
 
-Last updated: 2026-03-02
+Last updated: 2026-03-07
