@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import { UserButton } from '@clerk/clerk-react'
 import { MeetingsTab, ReferenceDocsTab } from './MeetingsTab'
+import SettingsTab from './SettingsTab'
+import { useAuthToken } from './AuthContext'
+import { useWorkspace } from './WorkspaceContext'
 import {
   Cell,
   Pie,
@@ -192,7 +196,6 @@ function deriveBrand(labels: string[], brands: string[], configuredBrands?: stri
 }
 
 const R2_URL = ((import.meta as any).env?.VITE_R2_URL || 'https://r2.bashai.io').replace(/\/$/, '')
-const R2_TOKEN = (import.meta as any).env?.VITE_R2_TOKEN || 'f60350db4573f75632476ab1e039a67515a6c5240fc8c6dd4d9319fe80bef146'
 
 async function fetchJiraSearch(jql: string, maxResults: number, token: string, nextPageToken?: string): Promise<any> {
   const fields = [
@@ -549,14 +552,15 @@ function SpotlightModal({ title, rows, columns, onClose }: { title: string; rows
 }
 
 function App() {
-  const getToken = async () => R2_TOKEN
+  const { getToken } = useAuthToken()
+  const { workspace } = useWorkspace()
   const [reportData, setReportData] = useState<ReportShape>(data)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [hasInitialLoadCompleted, setHasInitialLoadCompleted] = useState(false)
   const [spotlight, setSpotlight] = useState<SpotlightKey>(null)
   const [pieSpotlight, setPieSpotlight] = useState<PieSpotlight>(null)
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'meetings' | 'reference'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'meetings' | 'reference' | 'settings'>('dashboard')
   const [projects, setProjects] = useState<Array<{ id: string; name: string; colour: string }>>([])
 
   useEffect(() => {
@@ -812,7 +816,13 @@ function App() {
     try {
       const token = await getToken()
       if (!token) throw new Error('Not authenticated')
-      const latest = await refreshFromJira(reportData, { token })
+      const latest = await refreshFromJira(reportData, {
+        token,
+        accountId: workspace?.jiraAccountId,
+        defaultJql: workspace?.jiraDefaultJql,
+        jiraInstanceUrl: workspace?.jiraInstanceUrl,
+        brands: workspace?.brands,
+      })
       setReportData(latest)
     } catch (err: any) {
       setRefreshError(err?.message || 'Failed to refresh')
@@ -850,6 +860,10 @@ function App() {
                 onClick={() => setActiveTab('reference')}
                 className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${activeTab === 'reference' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
               >Reference Docs</button>
+              <button
+                onClick={() => setActiveTab('settings')}
+                className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${activeTab === 'settings' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+              >Settings</button>
             </div>
             {summary.scopeNote && <p className="mt-1 text-sm text-slate-400">{summary.scopeNote}</p>}
             <p className="mt-1 text-xs text-slate-500">
@@ -881,11 +895,13 @@ function App() {
                 </option>
               ))}
             </select>
+            <UserButton afterSignOutUrl="/" />
           </div>
         </header>
 
         {activeTab === 'meetings' ? <MeetingsTab /> : null}
         {activeTab === 'reference' ? <ReferenceDocsTab /> : null}
+        {activeTab === 'settings' ? <SettingsTab /> : null}
 
         {activeTab === 'dashboard' ? <><section className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <button onClick={() => setSpotlight('all')} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-left transition hover:border-sky-700 hover:bg-slate-800/70">

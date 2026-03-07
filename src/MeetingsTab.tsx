@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { unzipSync } from 'fflate';
 import { useWorkspace } from './WorkspaceContext';
+import { useAuthToken } from './AuthContext';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const R2_URL = ((import.meta as any).env?.VITE_R2_URL || 'https://r2.bashai.io').replace(/\/$/, '');
@@ -121,14 +122,20 @@ function projectLabelSlug(id: string) {
   return `project-${id.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
 }
 
-const R2_SECRET = (import.meta as any).env?.VITE_R2_TOKEN || 'f60350db4573f75632476ab1e039a67515a6c5240fc8c6dd4d9319fe80bef146';
+// Module-level token getter — set by component on mount via useAuthToken
+let _getToken: () => Promise<string> = async () => '';
+
+export function _setTokenGetter(fn: () => Promise<string>) {
+  _getToken = fn;
+}
 
 async function r2Fetch(path: string, opts: RequestInit = {}) {
+  const token = await _getToken();
   return fetch(`${R2_URL}${path}`, {
     ...opts,
     credentials: 'omit',
     headers: {
-      Authorization: `Bearer ${R2_SECRET}`,
+      Authorization: `Bearer ${token}`,
       ...(opts.headers || {}),
     },
   });
@@ -916,6 +923,8 @@ async function uploadRefDocs(
 
 // ── ReferenceDocsTab component ─────────────────────────────────────────────────
 export function ReferenceDocsTab() {
+  const { getToken } = useAuthToken();
+  _setTokenGetter(getToken);
   const [docs, setDocs] = useState<RefDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
@@ -1706,6 +1715,8 @@ function MeetingsList({ onSelect, refresh, onRefresh }: {
 
 // ── MeetingsTab main component ─────────────────────────────────────────────────
 export function MeetingsTab() {
+  const { getToken } = useAuthToken();
+  _setTokenGetter(getToken);
   const { workspace } = useWorkspace();
   const jiraProjectKey = workspace?.jiraProjectKey || 'PKPI2';
   const jiraAccountId = workspace?.jiraAccountId || '5f7a805b25fbdf00685e6cf8';
