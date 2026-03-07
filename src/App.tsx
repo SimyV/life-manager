@@ -894,7 +894,7 @@ function App() {
       <div className="mx-auto max-w-[1500px] space-y-6">
         <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
           <div>
-            <h1 className="text-4xl font-bold tracking-tight text-white">Personal Planning Dashboard</h1>
+            <h1 className="text-4xl font-bold tracking-tight text-white">{workspace?.name ? `${workspace.name} Planning` : 'Planning Dashboard'}</h1>
             <div className="mt-3 flex gap-2">
               <button
                 onClick={() => setActiveTab('dashboard')}
@@ -913,10 +913,9 @@ function App() {
                 className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition ${activeTab === 'settings' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
               >Settings</button>
             </div>
-            {summary.scopeNote && <p className="mt-1 text-sm text-slate-400">{summary.scopeNote}</p>}
-            <p className="mt-1 text-xs text-slate-500">
-              Owner: {summary.owner.name} | Generated: {new Date(summary.generatedAt).toLocaleString()}
-            </p>
+            {summary.owner.name && <p className="mt-1 text-xs text-slate-500">
+              Owner: {summary.owner.name} | Last refreshed: {new Date(summary.generatedAt).toLocaleString()}
+            </p>}
             {refreshError ? <p className="mt-1 text-xs text-rose-300">Refresh failed: {refreshError}</p> : null}
           </div>
           <div className="flex flex-wrap items-center gap-3">
