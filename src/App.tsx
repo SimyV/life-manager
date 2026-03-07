@@ -553,7 +553,10 @@ function SpotlightModal({ title, rows, columns, onClose }: { title: string; rows
 
 function App() {
   const { getToken } = useAuthToken()
-  const { workspace } = useWorkspace()
+  const { workspace, workspaces, switchWorkspace, createWorkspace } = useWorkspace()
+  const [showNewWs, setShowNewWs] = useState(false)
+  const [newWsName, setNewWsName] = useState('')
+  const [creatingWs, setCreatingWs] = useState(false)
   const [reportData, setReportData] = useState<ReportShape>(data)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
@@ -895,8 +898,70 @@ function App() {
                 </option>
               ))}
             </select>
+            {workspaces.length > 0 ? (
+              <select
+                value={workspace?.id || ''}
+                onChange={(e) => {
+                  if (e.target.value === '__new__') {
+                    setShowNewWs(true)
+                  } else {
+                    switchWorkspace(e.target.value)
+                  }
+                }}
+                className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200"
+              >
+                {workspaces.map((ws) => (
+                  <option key={ws.id} value={ws.id}>{ws.name}</option>
+                ))}
+                <option value="__new__">+ New Workspace</option>
+              </select>
+            ) : (
+              <button
+                onClick={() => setShowNewWs(true)}
+                className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 hover:border-cyan-600"
+              >
+                {workspace?.name || 'Workspace'}
+              </button>
+            )}
             <UserButton afterSignOutUrl="/" />
           </div>
+          {showNewWs && (
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                type="text"
+                value={newWsName}
+                onChange={(e) => setNewWsName(e.target.value)}
+                placeholder="New workspace name"
+                className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') { setShowNewWs(false); setNewWsName('') }
+                }}
+              />
+              <button
+                onClick={async () => {
+                  if (!newWsName.trim()) return
+                  setCreatingWs(true)
+                  try {
+                    await createWorkspace(newWsName.trim())
+                    setNewWsName('')
+                    setShowNewWs(false)
+                  } catch {}
+                  finally { setCreatingWs(false) }
+                }}
+                disabled={creatingWs || !newWsName.trim()}
+                className="rounded-xl border border-cyan-700 bg-cyan-600/20 px-3 py-2 text-sm font-semibold text-cyan-200 disabled:opacity-50"
+              >
+                {creatingWs ? 'Creating...' : 'Create'}
+              </button>
+              <button
+                onClick={() => { setShowNewWs(false); setNewWsName('') }}
+                className="rounded-lg px-2 py-1 text-slate-400 hover:text-slate-200"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
         </header>
 
         {activeTab === 'meetings' ? <MeetingsTab /> : null}

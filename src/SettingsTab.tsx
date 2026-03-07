@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useUser } from '@clerk/clerk-react'
 import { useWorkspace } from './WorkspaceContext'
 
-function Input({ label, value, onChange, placeholder, type = 'text' }: {
-  label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string
+function Input({ label, value, onChange, placeholder, type = 'text', savedValue }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; savedValue?: string
 }) {
   return (
     <div>
@@ -15,6 +15,9 @@ function Input({ label, value, onChange, placeholder, type = 'text' }: {
         placeholder={placeholder}
         className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500"
       />
+      {savedValue && (
+        <p className="mt-1 text-xs text-emerald-400/70">Saved: {type === 'password' ? '••••••••' : savedValue}</p>
+      )}
     </div>
   )
 }
@@ -91,7 +94,6 @@ export default function SettingsTab() {
   const jiraSecretsConfigured = integrations.jira?.length > 0
   const miroSecretsConfigured = integrations.miro?.length > 0
 
-  // Resolve member display name — use Clerk user info for current user, email for others
   const memberDisplayName = (m: { clerkUserId: string; email: string }) => {
     if (user && m.clerkUserId === user.id) {
       return user.fullName || user.primaryEmailAddress?.emailAddress || m.email || m.clerkUserId
@@ -166,9 +168,9 @@ export default function SettingsTab() {
     <div className="space-y-6">
       {/* Workspace */}
       <Section title="Workspace" description="General workspace settings visible to all members.">
-        <Input label="Workspace Name" value={wsName} onChange={setWsName} placeholder="My Workspace" />
-        <Input label="Owner Name" value={ownerName} onChange={setOwnerName} placeholder="Jane Smith" />
-        <Input label="Brands (comma-separated)" value={brandsText} onChange={setBrandsText} placeholder="Brand A, Brand B" />
+        <Input label="Workspace Name" value={wsName} onChange={setWsName} placeholder="My Workspace" savedValue={workspace?.name && workspace.name !== 'Personal' ? workspace.name : undefined} />
+        <Input label="Owner Name" value={ownerName} onChange={setOwnerName} placeholder="Jane Smith" savedValue={workspace?.ownerName || undefined} />
+        <Input label="Brands (comma-separated)" value={brandsText} onChange={setBrandsText} placeholder="Brand A, Brand B" savedValue={workspace?.brands?.length ? workspace.brands.join(', ') : undefined} />
         <div className="flex items-center gap-3">
           <SaveButton onClick={onSaveWorkspace} saving={wsSaving} />
           <StatusMessage error={wsError} success={wsSuccess} />
@@ -177,9 +179,9 @@ export default function SettingsTab() {
 
       {/* Jira Settings */}
       <Section title="Jira Settings" description="Non-sensitive Jira configuration. These values are stored in plain text.">
-        <Input label="Jira Instance URL" value={jiraInstanceUrl} onChange={setJiraInstanceUrl} placeholder="yourcompany.atlassian.net" />
-        <Input label="Default Project Key (for ticket creation)" value={jiraProjectKey} onChange={setJiraProjectKey} placeholder="PROJ" />
-        <Input label="Your Jira Account ID" value={jiraAccountId} onChange={setJiraAccountId} placeholder="Your Atlassian account ID" />
+        <Input label="Jira Instance URL" value={jiraInstanceUrl} onChange={setJiraInstanceUrl} placeholder="yourcompany.atlassian.net" savedValue={workspace?.jiraInstanceUrl || undefined} />
+        <Input label="Default Project Key (for ticket creation)" value={jiraProjectKey} onChange={setJiraProjectKey} placeholder="PROJ" savedValue={workspace?.jiraProjectKey || undefined} />
+        <Input label="Your Jira Account ID" value={jiraAccountId} onChange={setJiraAccountId} placeholder="Your Atlassian account ID" savedValue={workspace?.jiraAccountId || undefined} />
         <div className="flex items-center gap-3">
           <SaveButton onClick={onSaveJiraSettings} saving={jiraSaving} />
           <StatusMessage error={jiraError} success={jiraSuccess} />
@@ -193,9 +195,9 @@ export default function SettingsTab() {
             Jira credentials are configured ({integrations.jira.join(', ')}). Enter new values below to update.
           </p>
         )}
-        <Input label="Jira Host (full URL)" value={jiraHost} onChange={setJiraHost} placeholder="https://yourcompany.atlassian.net" />
-        <Input label="Org Email (use your bashai.io email if no org email)" value={jiraEmail} onChange={setJiraEmail} placeholder="you@company.com" type="email" />
-        <Input label="Jira API Token" value={jiraApiToken} onChange={setJiraApiToken} placeholder="Enter API token" type="password" />
+        <Input label="Jira Host (full URL)" value={jiraHost} onChange={setJiraHost} placeholder="https://yourcompany.atlassian.net" savedValue={jiraSecretsConfigured && integrations.jira.includes('host') ? 'Configured' : undefined} />
+        <Input label="Org Email (use your bashai.io email if not available)" value={jiraEmail} onChange={setJiraEmail} placeholder="you@company.com" type="email" savedValue={jiraSecretsConfigured && integrations.jira.includes('email') ? 'Configured' : undefined} />
+        <Input label="Jira API Token" value={jiraApiToken} onChange={setJiraApiToken} placeholder="Enter API token" type="password" savedValue={jiraSecretsConfigured && integrations.jira.includes('apiToken') ? 'Configured' : undefined} />
         <div className="flex items-center gap-3">
           <SaveButton onClick={onSaveJiraSecrets} saving={jiraSecretSaving} label="Save Credentials" />
           <StatusMessage error={jiraSecretError} success={jiraSecretSuccess} />
@@ -204,13 +206,8 @@ export default function SettingsTab() {
 
       {/* Miro */}
       <Section title="Miro" description="Miro board generation settings. API key is encrypted.">
-        {miroSecretsConfigured && (
-          <p className="rounded-lg border border-emerald-800 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-            Miro API key is configured. Enter a new value below to update.
-          </p>
-        )}
-        <Input label="Miro Team ID" value={miroTeamId} onChange={setMiroTeamId} placeholder="Your Miro team ID" />
-        <Input label="Miro API Key" value={miroApiKey} onChange={setMiroApiKey} placeholder="Enter Miro API key" type="password" />
+        <Input label="Miro Team ID" value={miroTeamId} onChange={setMiroTeamId} placeholder="Your Miro team ID" savedValue={workspace?.miroTeamId || undefined} />
+        <Input label="Miro API Key" value={miroApiKey} onChange={setMiroApiKey} placeholder="Enter Miro API key" type="password" savedValue={miroSecretsConfigured ? 'Configured' : undefined} />
         <div className="flex items-center gap-3">
           <SaveButton onClick={onSaveMiro} saving={miroSaving} />
           <StatusMessage error={miroError} success={miroSuccess} />
