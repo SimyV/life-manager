@@ -52,7 +52,7 @@ function StatusMessage({ error, success }: { error: string | null; success: stri
 }
 
 export default function SettingsTab() {
-  const { workspace, integrations, isAdmin, updateWorkspace, saveSecrets, inviteMember, removeMember, changeMemberRole } = useWorkspace()
+  const { workspace, workspaces, integrations, isAdmin, updateWorkspace, saveSecrets, inviteMember, removeMember, changeMemberRole, deleteWorkspace } = useWorkspace()
   const { user } = useUser()
 
   // Workspace settings
@@ -92,6 +92,11 @@ export default function SettingsTab() {
   const [inviting, setInviting] = useState(false)
   const [inviteResult, setInviteResult] = useState<string | null>(null)
   const [memberError, setMemberError] = useState<string | null>(null)
+
+  // Delete workspace
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const jiraSecretsConfigured = integrations.jira?.length > 0
   const miroSecretsConfigured = integrations.miro?.length > 0
@@ -287,6 +292,54 @@ export default function SettingsTab() {
         )}
         <StatusMessage error={memberError} success={null} />
       </Section>
+
+      {/* Danger Zone */}
+      {workspaces.length > 1 && (
+        <Section title="Danger Zone" description="Irreversible actions for this workspace.">
+          {!confirmDelete ? (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="rounded-xl border border-rose-800 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-300 hover:bg-rose-500/20"
+            >
+              Delete Workspace
+            </button>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-rose-300">
+                This will permanently delete <strong>{workspace?.name}</strong> and all its data (meetings, reference docs, Miro boards, settings). This cannot be undone.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    if (!workspace?.id) return
+                    setDeleting(true)
+                    setDeleteError(null)
+                    try {
+                      await deleteWorkspace(workspace.id)
+                      setConfirmDelete(false)
+                    } catch (err: any) {
+                      setDeleteError(err?.message || 'Failed to delete')
+                    } finally {
+                      setDeleting(false)
+                    }
+                  }}
+                  disabled={deleting}
+                  className="rounded-xl border border-rose-700 bg-rose-600/30 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-600/50 disabled:opacity-50"
+                >
+                  {deleting ? 'Deleting...' : 'Yes, delete permanently'}
+                </button>
+                <button
+                  onClick={() => { setConfirmDelete(false); setDeleteError(null) }}
+                  className="rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-slate-200"
+                >
+                  Cancel
+                </button>
+              </div>
+              <StatusMessage error={deleteError} success={null} />
+            </div>
+          )}
+        </Section>
+      )}
     </div>
   )
 }

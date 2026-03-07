@@ -48,6 +48,7 @@ type WorkspaceContextType = {
   inviteMember: (email: string, role?: string) => Promise<{ inviteUrl: string }>
   removeMember: (userId: string) => Promise<void>
   changeMemberRole: (userId: string, role: string) => Promise<void>
+  deleteWorkspace: (wsId: string) => Promise<void>
 }
 
 const noop = async () => {}
@@ -67,6 +68,7 @@ const WorkspaceContext = createContext<WorkspaceContextType>({
   inviteMember: async () => ({ inviteUrl: '' }),
   removeMember: noop,
   changeMemberRole: noop,
+  deleteWorkspace: noop,
 })
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
@@ -198,6 +200,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     await reload()
   }, [apiFetch, reload])
 
+  const deleteWorkspace = useCallback(async (wsId: string) => {
+    const res = await apiFetch('/config/workspace', {
+      method: 'DELETE',
+      body: JSON.stringify({ workspaceId: wsId }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to delete workspace (${res.status})`)
+    }
+    await reload()
+  }, [apiFetch, reload])
+
   const isAdmin = !!user && !!workspace?.members?.some(
     m => m.clerkUserId === user.id && (m.role === 'admin' || (m.role as string) === 'owner')
   )
@@ -218,6 +232,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       inviteMember,
       removeMember,
       changeMemberRole,
+      deleteWorkspace,
     }}>
       {children}
     </WorkspaceContext.Provider>

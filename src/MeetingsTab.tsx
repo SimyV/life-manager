@@ -67,8 +67,6 @@ type PriorityOption = {
 };
 
 // ── Option arrays ──────────────────────────────────────────────────────────────
-const SBU_OPTIONS = ['B&D', 'DGL International', 'Dulux Paint & Coating', 'DuluxGroup Corporate', 'Lincoln Sentry', 'Selleys', 'Yates'];
-
 const PRIORITY_OPTIONS: PriorityOption[] = [
   { label: 'P1 — Critical', jiraPriority: 'Critical', prioritisation: 'P1', tshirt: 'S = ($20-60k 1-3 months)', urgency: 'Critical' },
   { label: 'P2 — High', jiraPriority: 'High', prioritisation: 'P2', tshirt: 'S = ($20-60k 1-3 months)', urgency: 'High' },
@@ -925,6 +923,8 @@ async function uploadRefDocs(
 export function ReferenceDocsTab() {
   const { getToken } = useAuthToken();
   _setTokenGetter(getToken);
+  const { workspace } = useWorkspace();
+  const wsId = workspace?.id;
   const [docs, setDocs] = useState<RefDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
@@ -974,7 +974,7 @@ export function ReferenceDocsTab() {
     setLoading(false);
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [wsId]);
 
   const addFiles = (fileList: FileList | null) => {
     if (!fileList) return;
@@ -1055,7 +1055,7 @@ export function ReferenceDocsTab() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
           </svg>
           <p className="text-sm text-slate-500">No reference documents yet.</p>
-          <p className="text-xs text-slate-600 mt-1">Upload capability maps, architecture diagrams, process docs to ground your Miro generation in real Dulux data.</p>
+          <p className="text-xs text-slate-600 mt-1">Upload capability maps, architecture diagrams, process docs to ground your Miro generation in your reference documents.</p>
         </div>
       ) : (
         <div className="space-y-6">
@@ -1176,7 +1176,7 @@ function MiroSection({ meeting, meetingKey }: { meeting: MeetingData; meetingKey
     } catch {}
     setRefDocsLoaded(true);
   };
-  useEffect(() => { loadRefDocs(); }, []);
+  useEffect(() => { loadRefDocs(); }, [meetingKey]);
 
   const addFiles = (fileList: FileList | null) => {
     if (!fileList) return;
@@ -1296,7 +1296,7 @@ function MiroSection({ meeting, meetingKey }: { meeting: MeetingData; meetingKey
           </button>
         </div>
         {!refDocsLoaded && <p className="text-xs text-slate-600">Loading...</p>}
-        {refDocsLoaded && refDocs.length === 0 && <p className="text-xs text-slate-600">No reference documents yet. Upload docs to ground diagram generation in real Dulux data.</p>}
+        {refDocsLoaded && refDocs.length === 0 && <p className="text-xs text-slate-600">No reference documents yet. Upload docs to ground diagram generation in your reference documents.</p>}
         {refDocsLoaded && refDocs.length > 0 && (
           <div className="space-y-1">
             {refDocs.map(d => (
@@ -1383,7 +1383,7 @@ function MeetingDetail({ meetingKey, onBack, projects, onProjectsChange, contact
   contacts: Contact[]; onContactsChange: (c: Contact[]) => void;
 }) {
   const { workspace } = useWorkspace();
-  const jiraInstanceUrl = workspace?.jiraInstanceUrl || 'duluxgroup.atlassian.net';
+  const jiraInstanceUrl = workspace?.jiraInstanceUrl || '';
   const jiraBrowseUrl = `https://${jiraInstanceUrl}/browse`;
   const [meeting, setMeeting] = useState<MeetingData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1535,7 +1535,7 @@ function MeetingDetail({ meetingKey, onBack, projects, onProjectsChange, contact
                           value={editForm.dueDate ?? ''} onChange={e => setEditForm(f => ({ ...f, dueDate: e.target.value }))} />
                         <input className="w-32 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-cyan-500"
                           value={editForm.jiraKey ?? ''} onChange={e => setEditForm(f => ({ ...f, jiraKey: e.target.value.trim().toUpperCase() }))}
-                          placeholder="PKPI2-123" />
+                          placeholder="PROJ-123" />
                       </div>
                       <div className="flex justify-end gap-2">
                         <button onClick={() => setEditingIdx(null)}
@@ -1718,14 +1718,14 @@ export function MeetingsTab() {
   const { getToken } = useAuthToken();
   _setTokenGetter(getToken);
   const { workspace } = useWorkspace();
-  const jiraProjectKey = workspace?.jiraProjectKey || 'PKPI2';
-  const jiraAccountId = workspace?.jiraAccountId || '5f7a805b25fbdf00685e6cf8';
-  const wsOwnerName = workspace?.ownerName || 'Simon Lobascher';
+  const jiraProjectKey = workspace?.jiraProjectKey || '';
+  const jiraAccountId = workspace?.jiraAccountId || '';
+  const wsOwnerName = workspace?.ownerName || '';
 
   const [status, setStatus] = useState<{ stage: string; message: string }>({ stage: 'idle', message: '' });
   const [selectedMeeting, setSelectedMeeting] = useState<string | null>(null);
   const [refreshCounter, setRefreshCounter] = useState(0);
-  const [sbu, setSbu] = useState(workspace?.brands?.[0] || 'Selleys');
+  const [sbu, setSbu] = useState(workspace?.brands?.[0] || '');
   const [pendingUpload, setPendingUpload] = useState<{ parsed: MeetingData; file: File; jsonKey: string; docxKey: string } | null>(null);
   const [priorities, setPriorities] = useState<number[]>([]);
   const [actionEnabled, setActionEnabled] = useState<boolean[]>([]);
@@ -1738,10 +1738,15 @@ export function MeetingsTab() {
   const [selectedProject, setSelectedProject] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const wsId = workspace?.id;
+
   useEffect(() => {
     loadProjects().then(setProjects);
     loadContacts().then(setContacts);
-  }, []);
+    setSelectedMeeting(null);
+    setPendingUpload(null);
+    setRefreshCounter(c => c + 1);
+  }, [wsId]);
 
   const processFile = async (file: File) => {
     if (!file.name.endsWith('.docx')) {
@@ -1872,7 +1877,7 @@ export function MeetingsTab() {
                 <label className="text-xs font-semibold text-slate-400">SBU</label>
                 <select value={sbu} onChange={e => setSbu(e.target.value)}
                   className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-cyan-500">
-                  {SBU_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                  {(workspace?.brands || []).map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
             </div>

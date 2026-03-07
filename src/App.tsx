@@ -188,7 +188,7 @@ function bucketFromSignedAgingDays(days: number | null): string {
 function deriveBrand(labels: string[], brands: string[], configuredBrands?: string[]): string {
   if (brands.length > 0) return brands[0]
   const hay = labels.join(' ').toLowerCase()
-  const knownBrands = configuredBrands && configuredBrands.length > 0 ? configuredBrands : ['Selleys', 'Yates']
+  const knownBrands = configuredBrands && configuredBrands.length > 0 ? configuredBrands : []
   for (const b of knownBrands) {
     if (hay.includes(b.toLowerCase())) return b
   }
@@ -247,7 +247,7 @@ async function fetchJiraSearch(jql: string, maxResults: number, token: string, n
   return resBody
 }
 
-function mapIssueToTicket(issue: any, jiraInstanceUrl = 'duluxgroup.atlassian.net', configuredBrands?: string[]): Ticket {
+function mapIssueToTicket(issue: any, jiraInstanceUrl = '', configuredBrands?: string[]): Ticket {
   const f = issue.fields || {}
   const statusCategoryName = (f.status?.statusCategory?.name || '').toLowerCase()
   const isDone = statusCategoryName === 'done'
@@ -308,7 +308,7 @@ function mapIssueToTicket(issue: any, jiraInstanceUrl = 'duluxgroup.atlassian.ne
 }
 
 // Default Jira accountId — used in JQL since currentUser() doesn't resolve via the proxy
-const DEFAULT_ACCOUNT_ID = '5f7a805b25fbdf00685e6cf8'
+const DEFAULT_ACCOUNT_ID = ''
 
 type RefreshConfig = {
   token: string
@@ -320,15 +320,17 @@ type RefreshConfig = {
 
 async function refreshFromJira(prev: ReportShape, config: RefreshConfig): Promise<ReportShape> {
   const accountId = config.accountId || DEFAULT_ACCOUNT_ID
-  const jiraInstance = config.jiraInstanceUrl || 'duluxgroup.atlassian.net'
-  const brands = config.brands && config.brands.length > 0 ? config.brands : ['Selleys', 'Yates']
+  const jiraInstance = config.jiraInstanceUrl || ''
+  const brands = config.brands && config.brands.length > 0 ? config.brands : []
 
-  // Use workspace-configured JQL if available, otherwise build the default query
-  const jql = config.defaultJql || [
-    `(assignee = "${accountId}" OR reporter = "${accountId}")`,
-    `OR (project in (EPM, DLWLC) AND statusCategory != Done AND (${brands.map(b => `"Brands[Function]" in ("${b}") OR labels in ("${b.toLowerCase()}") OR text ~ "${b}"`).join(' OR ')}))`,
-    'OR ("Project Type" = "AI")',
-  ].join(' ')
+  // Use workspace-configured JQL if available, otherwise build a generic fallback
+  let jql = config.defaultJql || ''
+  if (!jql && accountId) {
+    jql = `(assignee = "${accountId}" OR reporter = "${accountId}") ORDER BY updated DESC`
+  }
+  if (!jql) {
+    throw new Error('No Jira configuration found. Please configure Jira settings for this workspace.')
+  }
 
   const runQuery = async (): Promise<any[]> => {
     const allIssues: any[] = []
@@ -566,6 +568,8 @@ function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'meetings' | 'reference' | 'settings'>('dashboard')
   const [projects, setProjects] = useState<Array<{ id: string; name: string; colour: string }>>([])
 
+  const wsId = workspace?.id
+
   useEffect(() => {
     const loadProjects = async () => {
       try {
@@ -576,10 +580,11 @@ function App() {
           credentials: 'omit',
         })
         if (res.ok) setProjects(await res.json())
-      } catch {}
+        else setProjects([])
+      } catch { setProjects([]) }
     }
     loadProjects()
-  }, [getToken])
+  }, [getToken, wsId])
 
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
   const { summary, tickets } = reportData
@@ -592,15 +597,19 @@ function App() {
 
   useEffect(() => {
     if (dashTab !== 'decisions') return
-    if (decisionTickets.length > 0) return  // already loaded
+    if (decisionTickets.length > 0) return  // already loaded for this workspace
     setDecisionsLoading(true)
     setDecisionsError(null)
     const loadDecisions = async () => {
       try {
         const token = await getToken()
         if (!token) throw new Error('Not authenticated')
-        const projectKey = 'PKPI2'
-        const jiraInstance = 'duluxgroup.atlassian.net'
+        const projectKey = workspace?.jiraProjectKey
+        const jiraInstance = workspace?.jiraInstanceUrl
+        if (!projectKey) {
+          setDecisionTickets([])
+          return
+        }
         const allIssues: any[] = []
         let nextPageToken: string | undefined
         while (true) {
@@ -619,7 +628,7 @@ function App() {
       }
     }
     loadDecisions()
-  }, [dashTab])
+  }, [dashTab, wsId])
 
   const selected = options.find((o) => o.key === periodKey) || options[0]
 
@@ -642,23 +651,25 @@ function App() {
   const ownerName = (summary.owner.name || '').toLowerCase()
   const ownerParts = ownerName.split(/\s+/).filter(Boolean)
 
-  // "Mine" = assigned to the workspace owner, or PKPI2 active where owner is the business contact
+  // "Mine" = assigned to the workspace owner, or project-key tickets where owner is the business contact
   const isMyTicket = (t: Ticket) => !t.assignee || !ownerName || t.assignee.toLowerCase().includes(ownerName) || ownerName.includes(t.assignee.toLowerCase())
   const isOwnerContact = (t: Ticket) => !t.businessContact || ownerParts.some((p: string) => t.businessContact!.toLowerCase().includes(p))
+  const wsProjectKey = workspace?.jiraProjectKey || ''
+  const isWsProject = (t: Ticket) => wsProjectKey ? t.key.startsWith(`${wsProjectKey}-`) : false
 
   const myAllTickets = projectFilteredTickets.filter((t) =>
-    t.active && (isMyTicket(t) || (t.key.startsWith('PKPI2-') && isOwnerContact(t)))
+    t.active && (isMyTicket(t) || (isWsProject(t) && isOwnerContact(t)))
   )
-  // Stakeholder PKPI2 = active PKPI2 with non-Simon business contact AND not assigned to Simon
-  const pkpi2OtherTickets = projectFilteredTickets.filter((t) =>
-    t.key.startsWith('PKPI2-') && t.active && !isMyTicket(t) && t.businessContact && !isOwnerContact(t)
+  // Stakeholder = active project-key tickets with non-owner business contact AND not assigned to owner
+  const projectOtherTickets = projectFilteredTickets.filter((t) =>
+    isWsProject(t) && t.active && !isMyTicket(t) && t.businessContact && !isOwnerContact(t)
   )
-  const stakeholderNonPkpi2Active = projectFilteredTickets.filter((t) => t.active && !t.key.startsWith('PKPI2-') && !isMyTicket(t))
-  const stakeholderNonPkpi2Completed = projectFilteredTickets.filter((t) => t.isDone && !t.key.startsWith('PKPI2-') && !isMyTicket(t))
-  const allStakeholderTickets = [...pkpi2OtherTickets, ...stakeholderNonPkpi2Active]
+  const stakeholderNonProjectActive = projectFilteredTickets.filter((t) => t.active && !isWsProject(t) && !isMyTicket(t))
+  const stakeholderNonProjectCompleted = projectFilteredTickets.filter((t) => t.isDone && !isWsProject(t) && !isMyTicket(t))
+  const allStakeholderTickets = [...projectOtherTickets, ...stakeholderNonProjectActive]
 
   // My Tickets tab charts
-  const projectTagSplit = groupCount(myAllTickets.filter((t) => t.key.startsWith('PKPI2-')), (r) => r.projectNameFromDesc || r.projectTag || 'Untagged')
+  const projectTagSplit = groupCount(myAllTickets.filter((t) => isWsProject(t)), (r) => r.projectNameFromDesc || r.projectTag || 'Untagged')
   const brandSplit = groupCount(myAllTickets, (r) => r.brand)
   const agingSplit = sortAgingBuckets(groupCount(myAllTickets, (r) => r.agingBucket))
 
@@ -835,14 +846,38 @@ function App() {
   }
 
   useEffect(() => {
+    // Reset dashboard state when workspace changes
+    setReportData(data)
+    setDecisionTickets([])
+    setHasInitialLoadCompleted(false)
+    setRefreshError(null)
+    setSpotlight(null)
+    setPieSpotlight(null)
+
     const runInitialRefresh = async () => {
-      await onRefresh()
-      setHasInitialLoadCompleted(true)
+      setIsRefreshing(true)
+      try {
+        const token = await getToken()
+        if (!token) throw new Error('Not authenticated')
+        const latest = await refreshFromJira(data, {
+          token,
+          accountId: workspace?.jiraAccountId,
+          defaultJql: workspace?.jiraDefaultJql,
+          jiraInstanceUrl: workspace?.jiraInstanceUrl,
+          brands: workspace?.brands,
+        })
+        setReportData(latest)
+      } catch (err: any) {
+        setRefreshError(err?.message || 'Failed to refresh')
+      } finally {
+        setIsRefreshing(false)
+        setHasInitialLoadCompleted(true)
+      }
     }
     void runInitialRefresh()
-    // Run once on initial page load.
+    // Re-run when workspace changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [wsId])
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_20%_0%,#0f2a5a_0%,#030b1f_40%,#020617_100%)] p-4 text-slate-100 md:p-8">
@@ -1086,14 +1121,14 @@ function App() {
             {dashTab === 'stakeholder' && <>
               <SortableFilterableTable<Ticket>
                 title="Stakeholder Commitments"
-                rows={[...pkpi2OtherTickets, ...stakeholderNonPkpi2Active]}
+                rows={[...projectOtherTickets, ...stakeholderNonProjectActive]}
                 columns={otherContactColumns}
                 defaultSortKey="agingDays"
                 defaultSortDir="desc"
               />
               <SortableFilterableTable<Ticket>
                 title="Completed"
-                rows={stakeholderNonPkpi2Completed}
+                rows={stakeholderNonProjectCompleted}
                 columns={completedColumns}
                 defaultSortKey="resolved"
                 defaultSortDir="desc"
