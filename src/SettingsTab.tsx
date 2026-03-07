@@ -158,8 +158,8 @@ export default function SettingsTab() {
       {/* Workspace */}
       <Section title="Workspace" description="General workspace settings visible to all members.">
         <Input label="Workspace Name" value={wsName} onChange={setWsName} placeholder="My Workspace" />
-        <Input label="Owner Name" value={ownerName} onChange={setOwnerName} placeholder="Simon Lobascher" />
-        <Input label="Brands (comma-separated)" value={brandsText} onChange={setBrandsText} placeholder="Selleys, Yates, Dulux" />
+        <Input label="Owner Name" value={ownerName} onChange={setOwnerName} placeholder="Jane Smith" />
+        <Input label="Brands (comma-separated)" value={brandsText} onChange={setBrandsText} placeholder="Brand A, Brand B" />
         <div className="flex items-center gap-3">
           <SaveButton onClick={onSaveWorkspace} saving={wsSaving} />
           <StatusMessage error={wsError} success={wsSuccess} />
@@ -168,9 +168,9 @@ export default function SettingsTab() {
 
       {/* Jira Settings */}
       <Section title="Jira Settings" description="Non-sensitive Jira configuration. These values are stored in plain text.">
-        <Input label="Jira Instance URL" value={jiraInstanceUrl} onChange={setJiraInstanceUrl} placeholder="duluxgroup.atlassian.net" />
-        <Input label="Default Project Key (for ticket creation)" value={jiraProjectKey} onChange={setJiraProjectKey} placeholder="PKPI2" />
-        <Input label="Your Jira Account ID" value={jiraAccountId} onChange={setJiraAccountId} placeholder="5f7a805b25fbdf00685e6cf8" />
+        <Input label="Jira Instance URL" value={jiraInstanceUrl} onChange={setJiraInstanceUrl} placeholder="yourcompany.atlassian.net" />
+        <Input label="Default Project Key (for ticket creation)" value={jiraProjectKey} onChange={setJiraProjectKey} placeholder="PROJ" />
+        <Input label="Your Jira Account ID" value={jiraAccountId} onChange={setJiraAccountId} placeholder="Your Atlassian account ID" />
         <div>
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-400">Default JQL Query</label>
           <textarea
@@ -194,8 +194,8 @@ export default function SettingsTab() {
             Jira credentials are configured ({integrations.jira.join(', ')}). Enter new values below to update.
           </p>
         )}
-        <Input label="Jira Host (full URL)" value={jiraHost} onChange={setJiraHost} placeholder="https://duluxgroup.atlassian.net" />
-        <Input label="Jira Email" value={jiraEmail} onChange={setJiraEmail} placeholder="simon@company.com" type="email" />
+        <Input label="Jira Host (full URL)" value={jiraHost} onChange={setJiraHost} placeholder="https://yourcompany.atlassian.net" />
+        <Input label="Jira Email" value={jiraEmail} onChange={setJiraEmail} placeholder="you@company.com" type="email" />
         <Input label="Jira API Token" value={jiraApiToken} onChange={setJiraApiToken} placeholder="Enter API token" type="password" />
         <div className="flex items-center gap-3">
           <SaveButton onClick={onSaveJiraSecrets} saving={jiraSecretSaving} label="Save Credentials" />

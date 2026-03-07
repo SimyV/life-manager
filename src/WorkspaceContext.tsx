@@ -97,8 +97,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         setWorkspace(data.workspace || data)
         setIntegrations(data.integrations || {})
       } else if (res.status === 404) {
-        // No workspace yet — use defaults
-        setWorkspace(defaultWorkspace)
+        // No workspace yet — auto-create with defaults
+        const createRes = await apiFetch('/config/workspace', {
+          method: 'PUT',
+          body: JSON.stringify(defaultWorkspace),
+        })
+        if (createRes.ok) {
+          const created = await createRes.json()
+          setWorkspace(created.workspace || created)
+          setIntegrations(created.integrations || {})
+        } else {
+          setWorkspace(defaultWorkspace)
+        }
       } else {
         throw new Error(`Failed to load workspace (${res.status})`)
       }
