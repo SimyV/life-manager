@@ -11,7 +11,6 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from 'recharts'
-import report from './data/reportData.json'
 
 type Ticket = {
   key: string
@@ -80,7 +79,15 @@ type PeriodOption = {
   quarter?: number
 }
 
-const data = report as ReportShape
+const emptyReport: ReportShape = {
+  summary: {
+    generatedAt: new Date().toISOString(),
+    owner: { name: '' },
+    scopeNote: '',
+    totals: { allTickets: 0, totalInitiatives: 0, overdueItems: 0, completed: 0, activeTickets: 0 },
+  },
+  tickets: [],
+}
 const PIE_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a78bfa', '#14b8a6', '#f43f5e', '#8b5cf6']
 
 function ragClass(rag: string): string {
@@ -316,6 +323,7 @@ type RefreshConfig = {
   defaultJql?: string
   jiraInstanceUrl?: string
   brands?: string[]
+  ownerName?: string
 }
 
 async function refreshFromJira(prev: ReportShape, config: RefreshConfig): Promise<ReportShape> {
@@ -371,8 +379,8 @@ async function refreshFromJira(prev: ReportShape, config: RefreshConfig): Promis
     summary: {
       ...prev.summary,
       generatedAt: new Date().toISOString(),
-      owner: { name: prev.summary.owner.name },
-      scopeNote: 'Your assigned and reported tickets, plus all tickets with Project Type = AI.',
+      owner: { name: config.ownerName || prev.summary.owner.name || '' },
+      scopeNote: config.defaultJql ? 'Tickets matching your workspace JQL query.' : 'Your assigned and reported Jira tickets.',
       totals: {
         ...prev.summary.totals,
         allTickets: tickets.length,
@@ -559,7 +567,7 @@ function App() {
   const [showNewWs, setShowNewWs] = useState(false)
   const [newWsName, setNewWsName] = useState('')
   const [creatingWs, setCreatingWs] = useState(false)
-  const [reportData, setReportData] = useState<ReportShape>(data)
+  const [reportData, setReportData] = useState<ReportShape>(emptyReport)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [hasInitialLoadCompleted, setHasInitialLoadCompleted] = useState(false)
@@ -836,6 +844,7 @@ function App() {
         defaultJql: workspace?.jiraDefaultJql,
         jiraInstanceUrl: workspace?.jiraInstanceUrl,
         brands: workspace?.brands,
+        ownerName: workspace?.ownerName,
       })
       setReportData(latest)
     } catch (err: any) {
@@ -847,7 +856,7 @@ function App() {
 
   useEffect(() => {
     // Reset dashboard state when workspace changes
-    setReportData(data)
+    setReportData(emptyReport)
     setDecisionTickets([])
     setHasInitialLoadCompleted(false)
     setRefreshError(null)
@@ -859,12 +868,13 @@ function App() {
       try {
         const token = await getToken()
         if (!token) throw new Error('Not authenticated')
-        const latest = await refreshFromJira(data, {
+        const latest = await refreshFromJira(emptyReport, {
           token,
           accountId: workspace?.jiraAccountId,
           defaultJql: workspace?.jiraDefaultJql,
           jiraInstanceUrl: workspace?.jiraInstanceUrl,
           brands: workspace?.brands,
+          ownerName: workspace?.ownerName,
         })
         setReportData(latest)
       } catch (err: any) {
