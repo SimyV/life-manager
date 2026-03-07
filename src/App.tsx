@@ -1013,9 +1013,9 @@ function App() {
           )}
         </header>
 
-        {activeTab === 'meetings' ? <MeetingsTab /> : null}
-        {activeTab === 'reference' ? <ReferenceDocsTab /> : null}
-        {activeTab === 'settings' ? <SettingsTab /> : null}
+        {activeTab === 'meetings' ? <MeetingsTab key={wsId} /> : null}
+        {activeTab === 'reference' ? <ReferenceDocsTab key={wsId} /> : null}
+        {activeTab === 'settings' ? <SettingsTab key={wsId} /> : null}
 
         {activeTab === 'dashboard' ? <><section className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <button onClick={() => setSpotlight('all')} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-left transition hover:border-sky-700 hover:bg-slate-800/70">
