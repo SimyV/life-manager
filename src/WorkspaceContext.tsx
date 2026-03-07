@@ -9,6 +9,15 @@ export type WorkspaceMember = {
   joinedAt: string
 }
 
+export type PendingInvite = {
+  token: string
+  email: string
+  role: string
+  invitedBy: string
+  createdAt: string
+  expiresAt: string
+}
+
 export type WorkspaceConfig = {
   id: string
   name: string
@@ -16,6 +25,7 @@ export type WorkspaceConfig = {
   createdAt: string
   updatedAt?: string
   members: WorkspaceMember[]
+  pendingInvites?: PendingInvite[]
   jiraInstanceUrl?: string
   jiraProjectKey?: string
   jiraAccountId?: string
@@ -49,6 +59,7 @@ type WorkspaceContextType = {
   removeMember: (userId: string) => Promise<void>
   changeMemberRole: (userId: string, role: string) => Promise<void>
   deleteWorkspace: (wsId: string) => Promise<void>
+  cancelInvite: (token: string) => Promise<void>
 }
 
 const noop = async () => {}
@@ -69,6 +80,7 @@ const WorkspaceContext = createContext<WorkspaceContextType>({
   removeMember: noop,
   changeMemberRole: noop,
   deleteWorkspace: noop,
+  cancelInvite: noop,
 })
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
@@ -179,9 +191,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       method: 'POST',
       body: JSON.stringify({ email, role }),
     })
-    if (!res.ok) throw new Error(`Failed to invite (${res.status})`)
-    return res.json()
-  }, [apiFetch])
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to invite (${res.status})`)
+    }
+    const result = await res.json()
+    await reload()
+    return result
+  }, [apiFetch, reload])
 
   const removeMember = useCallback(async (userId: string) => {
     const res = await apiFetch(`/config/members?userId=${encodeURIComponent(userId)}`, {
@@ -212,6 +229,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     await reload()
   }, [apiFetch, reload])
 
+  const cancelInvite = useCallback(async (token: string) => {
+    const res = await apiFetch(`/config/invite?token=${encodeURIComponent(token)}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) throw new Error(`Failed to cancel invite (${res.status})`)
+    await reload()
+  }, [apiFetch, reload])
+
   const isAdmin = !!user && !!workspace?.members?.some(
     m => m.clerkUserId === user.id && (m.role === 'admin' || (m.role as string) === 'owner')
   )
@@ -233,6 +258,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       removeMember,
       changeMemberRole,
       deleteWorkspace,
+      cancelInvite,
     }}>
       {children}
     </WorkspaceContext.Provider>

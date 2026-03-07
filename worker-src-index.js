@@ -1414,6 +1414,14 @@ Generate 10-20 nodes with precise coordinates. Every node must use real names fr
           }
 
           const ws = await readJSON(`workspaces/${wsId}/config.json`);
+          // Clean up expired invites
+          if (ws?.pendingInvites?.length) {
+            const before = ws.pendingInvites.length;
+            ws.pendingInvites = ws.pendingInvites.filter(i => new Date(i.expiresAt) > new Date());
+            if (ws.pendingInvites.length !== before) {
+              await writeJSON(`workspaces/${wsId}/config.json`, ws);
+            }
+          }
           return new Response(JSON.stringify(ws), {
             headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
           });
@@ -1537,6 +1545,14 @@ Generate 10-20 nodes with precise coordinates. Every node must use real names fr
             });
           }
 
+          // Check if already has a pending invite
+          ws.pendingInvites = (ws.pendingInvites || []).filter(i => new Date(i.expiresAt) > new Date());
+          if (ws.pendingInvites.some(i => i.email === email)) {
+            return new Response(JSON.stringify({ error: 'An invite is already pending for this email' }), {
+              status: 409, headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+            });
+          }
+
           // Create invite token
           const inviteToken = crypto.randomUUID();
           const invite = {
@@ -1551,12 +1567,34 @@ Generate 10-20 nodes with precise coordinates. Every node must use real names fr
           };
           await writeJSON(`invites/${inviteToken}.json`, invite);
 
+          // Track on workspace config
+          ws.pendingInvites.push({ token: inviteToken, email, role, invitedBy: invite.invitedBy, createdAt: invite.createdAt, expiresAt: invite.expiresAt });
+          await writeJSON(`workspaces/${wsId}/config.json`, ws);
+
           return new Response(JSON.stringify({
             success: true,
             inviteToken,
             inviteUrl: `https://manage.bashai.io/#/invite/${inviteToken}`,
             expiresAt: invite.expiresAt,
           }), {
+            headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+          });
+        }
+
+        // ── DELETE /config/invite?token=xxx ─────────────────────────────────
+        // Cancel a pending invite (admin-only)
+        if (request.method === 'DELETE' && url.pathname === '/config/invite') {
+          const { wsId, ws } = await requireAdmin();
+          const token = url.searchParams.get('token');
+          if (!token) {
+            return new Response(JSON.stringify({ error: 'token query param required' }), {
+              status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+            });
+          }
+          ws.pendingInvites = (ws.pendingInvites || []).filter(i => i.token !== token);
+          await writeJSON(`workspaces/${wsId}/config.json`, ws);
+          await env.MEETINGS.delete(`invites/${token}.json`);
+          return new Response(JSON.stringify({ success: true }), {
             headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
           });
         }
@@ -1606,8 +1644,10 @@ Generate 10-20 nodes with precise coordinates. Every node must use real names fr
               role: invite.role || 'member',
               joinedAt: new Date().toISOString(),
             });
-            await writeJSON(`workspaces/${invite.workspaceId}/config.json`, ws);
           }
+          // Remove from pending invites
+          ws.pendingInvites = (ws.pendingInvites || []).filter(i => i.token !== inviteToken);
+          await writeJSON(`workspaces/${invite.workspaceId}/config.json`, ws);
 
           // Map user to workspace
           await writeJSON(`user-workspaces/${clerkUserId}.json`, { workspaceId: invite.workspaceId });

@@ -52,7 +52,7 @@ function StatusMessage({ error, success }: { error: string | null; success: stri
 }
 
 export default function SettingsTab() {
-  const { workspace, workspaces, integrations, isAdmin, updateWorkspace, saveSecrets, inviteMember, removeMember, changeMemberRole, deleteWorkspace } = useWorkspace()
+  const { workspace, workspaces, integrations, isAdmin, updateWorkspace, saveSecrets, inviteMember, removeMember, changeMemberRole, deleteWorkspace, cancelInvite } = useWorkspace()
   const { user } = useUser()
 
   // Workspace settings
@@ -259,6 +259,31 @@ export default function SettingsTab() {
             </div>
           ))}
         </div>
+
+        {(workspace?.pendingInvites || []).length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Pending Invites</p>
+            {(workspace?.pendingInvites || []).map((inv) => (
+              <div key={inv.token} className="flex items-center justify-between rounded-xl border border-amber-800/40 bg-amber-500/5 px-4 py-3">
+                <div>
+                  <p className="text-sm text-slate-200">{inv.email}</p>
+                  <p className="text-xs text-slate-500">
+                    Invited {new Date(inv.createdAt).toLocaleDateString()} · Expires {new Date(inv.expiresAt).toLocaleDateString()} · Role: {inv.role}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-lg border border-amber-700 bg-amber-500/10 px-2 py-1 text-xs text-amber-300">Pending</span>
+                  <button
+                    onClick={() => cancelInvite(inv.token)}
+                    className="rounded-lg border border-rose-800 bg-rose-500/10 px-3 py-1 text-xs text-rose-300 hover:bg-rose-500/20"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="mt-4 flex gap-2">
           <input
