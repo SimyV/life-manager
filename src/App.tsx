@@ -567,6 +567,7 @@ function App() {
   const [showNewWs, setShowNewWs] = useState(false)
   const [newWsName, setNewWsName] = useState('')
   const [creatingWs, setCreatingWs] = useState(false)
+  const [switchingWs, setSwitchingWs] = useState(false)
   const [reportData, setReportData] = useState<ReportShape>(emptyReport)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
@@ -890,7 +891,15 @@ function App() {
   }, [wsId])
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_20%_0%,#0f2a5a_0%,#030b1f_40%,#020617_100%)] p-4 text-slate-100 md:p-8">
+    <div className="relative min-h-screen bg-[radial-gradient(circle_at_20%_0%,#0f2a5a_0%,#030b1f_40%,#020617_100%)] p-4 text-slate-100 md:p-8">
+      {switchingWs && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900 px-8 py-6 shadow-2xl">
+            <span className="inline-block h-8 w-8 animate-spin rounded-full border-3 border-slate-600 border-t-cyan-400" />
+            <p className="text-sm font-medium text-slate-200">Switching workspace...</p>
+          </div>
+        </div>
+      )}
       <div className="mx-auto max-w-[1500px] space-y-6">
         <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
           <div>
@@ -945,11 +954,12 @@ function App() {
             {workspaces.length > 1 ? (
               <select
                 value={workspace?.id || ''}
-                onChange={(e) => {
+                onChange={async (e) => {
                   if (e.target.value === '__new__') {
                     setShowNewWs(true)
                   } else {
-                    switchWorkspace(e.target.value)
+                    setSwitchingWs(true)
+                    try { await switchWorkspace(e.target.value) } finally { setSwitchingWs(false) }
                   }
                 }}
                 className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200"
