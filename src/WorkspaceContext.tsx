@@ -1,10 +1,11 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { useUser } from '@clerk/clerk-react'
 import { useAuthToken } from './AuthContext'
 
 export type WorkspaceMember = {
   clerkUserId: string
   email: string
-  role: 'owner' | 'member'
+  role: 'admin' | 'member' | 'owner'
   joinedAt: string
 }
 
@@ -38,7 +39,7 @@ type WorkspaceContextType = {
   integrations: IntegrationSummary
   loading: boolean
   error: string | null
-  isOwner: boolean
+  isAdmin: boolean
   reload: () => Promise<void>
   switchWorkspace: (wsId: string) => Promise<void>
   createWorkspace: (name: string) => Promise<void>
@@ -46,25 +47,18 @@ type WorkspaceContextType = {
   saveSecrets: (integration: string, secrets: Record<string, string>) => Promise<void>
   inviteMember: (email: string, role?: string) => Promise<{ inviteUrl: string }>
   removeMember: (userId: string) => Promise<void>
-}
-
-const defaultWorkspace: WorkspaceConfig = {
-  id: 'default',
-  name: 'Personal',
-  brands: [],
-  createdAt: new Date().toISOString(),
-  members: [],
+  changeMemberRole: (userId: string, role: string) => Promise<void>
 }
 
 const noop = async () => {}
 
 const WorkspaceContext = createContext<WorkspaceContextType>({
-  workspace: defaultWorkspace,
+  workspace: null,
   workspaces: [],
   integrations: {},
-  loading: false,
+  loading: true,
   error: null,
-  isOwner: true,
+  isAdmin: false,
   reload: noop,
   switchWorkspace: noop,
   createWorkspace: noop,
@@ -72,27 +66,21 @@ const WorkspaceContext = createContext<WorkspaceContextType>({
   saveSecrets: noop as any,
   inviteMember: async () => ({ inviteUrl: '' }),
   removeMember: noop,
+  changeMemberRole: noop,
 })
 
-const WS_STORAGE_KEY = 'life-manager-active-workspace'
-
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useUser()
   const { getToken, r2Url } = useAuthToken()
   const [workspace, setWorkspace] = useState<WorkspaceConfig | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [integrations, setIntegrations] = useState<IntegrationSummary>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activeWsId, setActiveWsId] = useState<string | null>(() => {
-    try { return localStorage.getItem(WS_STORAGE_KEY) } catch { return null }
-  })
 
   const apiFetch = useCallback(async (path: string, opts: RequestInit = {}) => {
     const token = await getToken()
-    // Append workspace ID as query param if we have one
-    const separator = path.includes('?') ? '&' : '?'
-    const wsParam = activeWsId ? `${separator}wsId=${encodeURIComponent(activeWsId)}` : ''
-    return fetch(`${r2Url}${path}${wsParam}`, {
+    return fetch(`${r2Url}${path}`, {
       ...opts,
       credentials: 'omit',
       headers: {
@@ -101,102 +89,66 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         ...(opts.headers || {}),
       },
     })
-  }, [getToken, r2Url, activeWsId])
+  }, [getToken, r2Url])
 
-  // Fetch list of workspaces the user belongs to
   const loadWorkspaces = useCallback(async () => {
     try {
-      const token = await getToken()
-      const res = await fetch(`${r2Url}/config/workspaces`, {
-        credentials: 'omit',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      })
+      const res = await apiFetch('/config/workspaces')
       if (res.ok) {
         const data = await res.json()
         setWorkspaces(Array.isArray(data) ? data : data.workspaces || [])
       }
     } catch {}
-  }, [getToken, r2Url])
+  }, [apiFetch])
 
-  const reload = useCallback(async () => {
+  const loadWorkspace = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
       const res = await apiFetch('/config/workspace')
       if (res.ok) {
         const data = await res.json()
-        const ws = data.workspace || data
-        setWorkspace(ws)
+        setWorkspace(data.workspace || data)
         setIntegrations(data.integrations || {})
-        // Persist active workspace
-        if (ws.id) {
-          setActiveWsId(ws.id)
-          try { localStorage.setItem(WS_STORAGE_KEY, ws.id) } catch {}
-        }
-      } else if (res.status === 404) {
-        // No workspace yet — auto-create with defaults
-        const createRes = await apiFetch('/config/workspace', {
-          method: 'PUT',
-          body: JSON.stringify(defaultWorkspace),
-        })
-        if (createRes.ok) {
-          const created = await createRes.json()
-          const ws = created.workspace || created
-          setWorkspace(ws)
-          setIntegrations(created.integrations || {})
-          if (ws.id) {
-            setActiveWsId(ws.id)
-            try { localStorage.setItem(WS_STORAGE_KEY, ws.id) } catch {}
-          }
-        } else {
-          setWorkspace(defaultWorkspace)
-        }
       } else {
         throw new Error(`Failed to load workspace (${res.status})`)
       }
     } catch (err: any) {
       setError(err?.message || 'Failed to load workspace')
-      setWorkspace(defaultWorkspace)
     } finally {
       setLoading(false)
     }
   }, [apiFetch])
 
-  useEffect(() => {
-    reload()
-    loadWorkspaces()
-  }, [reload, loadWorkspaces])
+  const reload = useCallback(async () => {
+    await Promise.all([loadWorkspace(), loadWorkspaces()])
+  }, [loadWorkspace, loadWorkspaces])
+
+  useEffect(() => { reload() }, [reload])
 
   const switchWorkspace = useCallback(async (wsId: string) => {
-    setActiveWsId(wsId)
-    try { localStorage.setItem(WS_STORAGE_KEY, wsId) } catch {}
-    // reload will pick up the new activeWsId via apiFetch
-  }, [])
-
-  // Re-reload when activeWsId changes
-  useEffect(() => {
-    if (activeWsId) reload()
-  }, [activeWsId]) // eslint-disable-line react-hooks/exhaustive-deps
+    const res = await apiFetch('/config/workspace/switch', {
+      method: 'PUT',
+      body: JSON.stringify({ workspaceId: wsId }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to switch workspace (${res.status})`)
+    }
+    await reload()
+  }, [apiFetch, reload])
 
   const createWorkspace = useCallback(async (name: string) => {
-    const token = await getToken()
-    const res = await fetch(`${r2Url}/config/workspace`, {
-      method: 'PUT',
-      credentials: 'omit',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, brands: [], newWorkspace: true }),
+    const res = await apiFetch('/config/workspace/create', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
     })
-    if (!res.ok) throw new Error(`Failed to create workspace (${res.status})`)
-    const data = await res.json()
-    const ws = data.workspace || data
-    if (ws.id) {
-      setActiveWsId(ws.id)
-      try { localStorage.setItem(WS_STORAGE_KEY, ws.id) } catch {}
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to create workspace (${res.status})`)
     }
-    setWorkspace(ws)
-    setIntegrations(data.integrations || {})
-    await loadWorkspaces()
-  }, [getToken, r2Url, loadWorkspaces])
+    await reload()
+  }, [apiFetch, reload])
 
   const updateWorkspace = useCallback(async (updates: Partial<Omit<WorkspaceConfig, 'id' | 'createdAt' | 'members'>>) => {
     const res = await apiFetch('/config/workspace', {
@@ -237,16 +189,27 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     await reload()
   }, [apiFetch, reload])
 
-  const isOwner = !workspace?.members?.length || workspace.members.some(m => m.role === 'owner')
+  const changeMemberRole = useCallback(async (userId: string, role: string) => {
+    const res = await apiFetch('/config/members/role', {
+      method: 'PUT',
+      body: JSON.stringify({ userId, role }),
+    })
+    if (!res.ok) throw new Error(`Failed to change role (${res.status})`)
+    await reload()
+  }, [apiFetch, reload])
+
+  const isAdmin = !!user && !!workspace?.members?.some(
+    m => m.clerkUserId === user.id && (m.role === 'admin' || (m.role as string) === 'owner')
+  )
 
   return (
     <WorkspaceContext.Provider value={{
-      workspace: workspace || defaultWorkspace,
+      workspace,
       workspaces,
       integrations,
       loading,
       error,
-      isOwner,
+      isAdmin,
       reload,
       switchWorkspace,
       createWorkspace,
@@ -254,6 +217,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       saveSecrets,
       inviteMember,
       removeMember,
+      changeMemberRole,
     }}>
       {children}
     </WorkspaceContext.Provider>

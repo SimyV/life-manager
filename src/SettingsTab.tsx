@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useUser } from '@clerk/clerk-react'
 import { useWorkspace } from './WorkspaceContext'
 
-function Input({ label, value, onChange, placeholder, type = 'text', savedValue }: {
-  label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; savedValue?: string
+function Input({ label, value, onChange, placeholder, type = 'text', savedValue, disabled }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; savedValue?: string; disabled?: boolean
 }) {
   return (
     <div>
@@ -13,7 +13,8 @@ function Input({ label, value, onChange, placeholder, type = 'text', savedValue 
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500"
+        disabled={disabled}
+        className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500 disabled:opacity-50"
       />
       {savedValue && (
         <p className="mt-1 text-xs text-emerald-400/70">Saved: {type === 'password' ? '••••••••' : savedValue}</p>
@@ -51,7 +52,7 @@ function StatusMessage({ error, success }: { error: string | null; success: stri
 }
 
 export default function SettingsTab() {
-  const { workspace, integrations, isOwner, updateWorkspace, saveSecrets, inviteMember, removeMember } = useWorkspace()
+  const { workspace, integrations, isAdmin, updateWorkspace, saveSecrets, inviteMember, removeMember, changeMemberRole } = useWorkspace()
   const { user } = useUser()
 
   // Workspace settings
@@ -87,6 +88,7 @@ export default function SettingsTab() {
 
   // Members
   const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member')
   const [inviting, setInviting] = useState(false)
   const [inviteResult, setInviteResult] = useState<string | null>(null)
   const [memberError, setMemberError] = useState<string | null>(null)
@@ -146,17 +148,17 @@ export default function SettingsTab() {
   const onInvite = async () => {
     setInviting(true); setMemberError(null); setInviteResult(null)
     try {
-      const { inviteUrl } = await inviteMember(inviteEmail)
+      const { inviteUrl } = await inviteMember(inviteEmail, inviteRole)
       setInviteResult(inviteUrl)
       setInviteEmail('')
     } catch (err: any) { setMemberError(err?.message || 'Failed') }
     finally { setInviting(false) }
   }
 
-  if (!isOwner) {
+  if (!isAdmin) {
     return (
       <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-8 text-center">
-        <p className="text-lg text-slate-300">Only workspace owners can manage settings.</p>
+        <p className="text-lg text-slate-300">Only workspace admins can manage settings.</p>
         <p className="mt-2 text-sm text-slate-500">
           Workspace: {workspace?.name || 'Loading...'} | Your role: member
         </p>
@@ -168,7 +170,7 @@ export default function SettingsTab() {
     <div className="space-y-6">
       {/* Workspace */}
       <Section title="Workspace" description="General workspace settings visible to all members.">
-        <Input label="Workspace Name" value={wsName} onChange={setWsName} placeholder="My Workspace" savedValue={workspace?.name && workspace.name !== 'Personal' ? workspace.name : undefined} />
+        <Input label="Workspace Name" value={wsName} onChange={setWsName} placeholder="My Workspace" savedValue={workspace?.name || undefined} />
         <Input label="Owner Name" value={ownerName} onChange={setOwnerName} placeholder="Jane Smith" savedValue={workspace?.ownerName || undefined} />
         <Input label="Brands (comma-separated)" value={brandsText} onChange={setBrandsText} placeholder="Brand A, Brand B" savedValue={workspace?.brands?.length ? workspace.brands.join(', ') : undefined} />
         <div className="flex items-center gap-3">
@@ -215,24 +217,40 @@ export default function SettingsTab() {
       </Section>
 
       {/* Members */}
-      <Section title="Members" description="Manage workspace access. Members can use all features but cannot change settings.">
+      <Section title="Members" description="Manage workspace access. Admins can change settings. Members can use all features but cannot modify settings.">
         <div className="space-y-2">
           {(workspace?.members || []).map((m) => (
             <div key={m.clerkUserId} className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3">
               <div>
                 <p className="text-sm text-slate-200">{memberDisplayName(m)}</p>
                 <p className="text-xs text-slate-500">
-                  {m.role} | joined {new Date(m.joinedAt).toLocaleDateString()}
+                  joined {new Date(m.joinedAt).toLocaleDateString()}
                 </p>
               </div>
-              {m.role !== 'owner' && (
-                <button
-                  onClick={() => removeMember(m.clerkUserId)}
-                  className="rounded-lg border border-rose-800 bg-rose-500/10 px-3 py-1 text-xs text-rose-300 hover:bg-rose-500/20"
-                >
-                  Remove
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {user && m.clerkUserId !== user.id ? (
+                  <>
+                    <select
+                      value={m.role === 'owner' ? 'admin' : m.role}
+                      onChange={(e) => changeMemberRole(m.clerkUserId, e.target.value)}
+                      className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-300"
+                    >
+                      <option value="admin">Admin</option>
+                      <option value="member">Member</option>
+                    </select>
+                    <button
+                      onClick={() => removeMember(m.clerkUserId)}
+                      className="rounded-lg border border-rose-800 bg-rose-500/10 px-3 py-1 text-xs text-rose-300 hover:bg-rose-500/20"
+                    >
+                      Remove
+                    </button>
+                  </>
+                ) : (
+                  <span className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-400">
+                    {m.role === 'owner' ? 'Admin' : m.role === 'admin' ? 'Admin' : 'Member'}
+                  </span>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -245,6 +263,14 @@ export default function SettingsTab() {
             placeholder="Email to invite"
             className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500"
           />
+          <select
+            value={inviteRole}
+            onChange={(e) => setInviteRole(e.target.value as 'member' | 'admin')}
+            className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200"
+          >
+            <option value="member">Member</option>
+            <option value="admin">Admin</option>
+          </select>
           <button
             onClick={onInvite}
             disabled={inviting || !inviteEmail}

@@ -553,7 +553,7 @@ function SpotlightModal({ title, rows, columns, onClose }: { title: string; rows
 
 function App() {
   const { getToken } = useAuthToken()
-  const { workspace, workspaces, switchWorkspace, createWorkspace } = useWorkspace()
+  const { workspace, workspaces, switchWorkspace, createWorkspace, isAdmin } = useWorkspace()
   const [showNewWs, setShowNewWs] = useState(false)
   const [newWsName, setNewWsName] = useState('')
   const [creatingWs, setCreatingWs] = useState(false)
@@ -898,7 +898,7 @@ function App() {
                 </option>
               ))}
             </select>
-            {workspaces.length > 0 ? (
+            {workspaces.length > 1 ? (
               <select
                 value={workspace?.id || ''}
                 onChange={(e) => {
@@ -913,14 +913,19 @@ function App() {
                 {workspaces.map((ws) => (
                   <option key={ws.id} value={ws.id}>{ws.name}</option>
                 ))}
-                <option value="__new__">+ New Workspace</option>
+                {isAdmin && <option value="__new__">+ New Workspace</option>}
               </select>
             ) : (
+              <span className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200">
+                {workspace?.name || 'Workspace'}
+              </span>
+            )}
+            {isAdmin && workspaces.length <= 1 && (
               <button
                 onClick={() => setShowNewWs(true)}
-                className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 hover:border-cyan-600"
+                className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-400 hover:border-cyan-600 hover:text-slate-200"
               >
-                {workspace?.name || 'Workspace'}
+                + New
               </button>
             )}
             <UserButton afterSignOutUrl="/" />
